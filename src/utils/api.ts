@@ -1,4 +1,4 @@
-import axios, { AxiosError } from 'axios'; // Import AxiosError for type checking
+import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios';
 
 // Get configured data portal URL from environment
 const DATA_PORTAL_URL = process.env.DATA_PORTAL_URL ?? '';
@@ -8,6 +8,59 @@ const SOCRATA_APP_TOKEN = process.env.SOCRATA_APP_TOKEN ?? '';
 const DATASET_PATH_REGEX = /\/resource\/(\w{4}-\w{4})\.json$/i;
 const DATASET_ID_REGEX = /(\w{4}-\w{4})/i;
 const PAGE_SIZE_LIMIT = 50000;
+
+// Request timeout and retry configuration
+const REQUEST_TIMEOUT_MS = 30_000; // 30 seconds
+const MAX_RETRIES = 3;
+const INITIAL_BACKOFF_MS = 1_000; // 1 second, doubles each retry
+const RETRYABLE_STATUS_CODES = [429, 503, 502, 504];
+
+/**
+ * Execute an axios request with timeout, and retry on transient failures.
+ * Uses exponential backoff with jitter for 429/5xx responses.
+ */
+async function requestWithRetry<T>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await axios({ ...config, timeout: REQUEST_TIMEOUT_MS });
+    } catch (e: unknown) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+
+      if (attempt === MAX_RETRIES) break;
+
+      // Only retry on retryable status codes or network timeouts
+      const shouldRetry =
+        (axios.isAxiosError(e) && e.response && RETRYABLE_STATUS_CODES.includes(e.response.status)) ||
+        (axios.isAxiosError(e) && e.code === 'ECONNABORTED');
+
+      if (!shouldRetry) break;
+
+      // Exponential backoff with jitter
+      const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt);
+
+      // For 429, respect Retry-After header if present
+      let waitMs = backoff;
+      if (axios.isAxiosError(e) && e.response?.status === 429) {
+        const retryAfter = e.response.headers['retry-after'];
+        if (retryAfter) {
+          const retrySeconds = parseInt(retryAfter, 10);
+          if (!isNaN(retrySeconds)) {
+            waitMs = Math.max(retrySeconds * 1000, backoff);
+          }
+        }
+      }
+
+      // Add jitter (0-25% of wait time)
+      waitMs += Math.random() * waitMs * 0.25;
+
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    }
+  }
+
+  throw lastError!;
+}
 
 function buildSoda3Url(datasetId: string, baseUrl: string = DEFAULT_BASE_URL): string {
   if (!baseUrl) {
@@ -120,13 +173,16 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
       const url = buildSoda3Url(datasetId, baseUrl);
       const payload = buildSoda3Payload(params);
 
-      const response = await axios.post(url, payload, {
+      const response = await requestWithRetry<T>({
+        method: 'post',
+        url,
+        data: payload,
         headers: {
           ...tokenHeader,
           'Content-Type': 'application/json'
         }
       });
-      return response.data as T;
+      return response.data;
     }
 
     if (!baseUrl) {
@@ -136,38 +192,46 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
     const trimmedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
     const url = `${trimmedBase}${path}`;
 
-    const response = await axios.get(url, {
+    const response = await requestWithRetry<T>({
+      method: 'get',
+      url,
       params,
       headers: tokenHeader
     });
-    return response.data as T;
-  } catch (e: unknown) { // Explicitly type caught error as unknown
+    return response.data;
+  } catch (e: unknown) {
     if (axios.isAxiosError(e)) {
-      // e is now narrowed to AxiosError
-      const axiosError = e as AxiosError; // Further assertion for clarity if needed, or just use e
-      if (axiosError.response) {
-        // The request was made and the server responded with a status code
-        // that falls out of the range of 2xx
+      const axiosError = e as AxiosError;
+
+      if (axiosError.code === 'ECONNABORTED') {
         throw new Error(
-          `API request failed: ${axiosError.response.status} - ${axiosError.response.statusText}\nData: ${JSON.stringify(axiosError.response.data)}`
+          `API request timed out after ${REQUEST_TIMEOUT_MS / 1000}s (retried ${MAX_RETRIES} times). The data portal may be under heavy load.`
+        );
+      }
+
+      if (axiosError.response) {
+        const status = axiosError.response.status;
+        if (status === 429) {
+          throw new Error(
+            `Rate limited by the data portal (HTTP 429) after ${MAX_RETRIES} retries. Too many requests — try again in a minute.`
+          );
+        }
+        throw new Error(
+          `API request failed: ${status} - ${axiosError.response.statusText}\nData: ${JSON.stringify(axiosError.response.data)}`
         );
       } else if (axiosError.request) {
-        // The request was made but no response was received
         throw new Error(
-          `API request failed: No response received. Message: ${axiosError.message}`
+          `API request failed: No response received (retried ${MAX_RETRIES} times). Message: ${axiosError.message}`
         );
       } else {
-        // Something happened in setting up the request that triggered an Error
         throw new Error(
           `API request setup failed: ${axiosError.message}`
         );
       }
     }
-    // Handle non-Axios errors or rethrow
     if (e instanceof Error) {
         throw new Error(`An unexpected error occurred: ${e.message}`);
     }
-    // Fallback for truly unknown errors
     throw new Error(`An unexpected and unknown error occurred: ${String(e)}`);
   }
 }
