@@ -46,15 +46,16 @@ git clone https://github.com/npstorey/socrata-mcp-server.git
 cd socrata-mcp-server
 npm install
 npm run build
-npm run dev   # Starts on http://localhost:10000
+npm run dev   # Starts on http://localhost:10000 (with PORT=10000 from .env)
 ```
 
 ### Environment variables
 
 ```bash
 # .env
-PORT=10000
+PORT=10000                                     # Project convention (local dev + Render). The code falls back to 8000 if PORT is unset.
 DATA_PORTAL_URL=https://data.cityofnewyork.us  # Default portal (optional)
+SOCRATA_APP_TOKEN=                             # Optional Socrata app token, sent as X-App-Token on portal requests for higher rate limits. Without it, portals apply stricter anonymous throttling.
 ```
 
 ## Available tools
