@@ -1135,7 +1135,7 @@ async function startApp() {
           try {
             const parsed = typeof currentRequestBody === 'string' ? JSON.parse(currentRequestBody) : currentRequestBody;
             if (parsed.method) {
-              lastResponseTimestamps.set(sessionId, {
+              lastResponseTimestamps.set(currentSessionId, {
                 method: parsed.method,
                 timestamp: Date.now()
               });
