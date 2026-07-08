@@ -101,7 +101,12 @@ Here are some areas where contributions would be particularly valuable:
 
 ## This is a multi-repo project
 
-This MCP server is one part of a larger project. If you're unsure where to contribute, see the [civic-ai-tools CONTRIBUTING guide](https://github.com/npstorey/civic-ai-tools/blob/main/CONTRIBUTING.md) for an overview of all three repos.
+This MCP server is one part of a larger project. If you're unsure where to contribute, see the [civic-ai-tools CONTRIBUTING guide](https://github.com/npstorey/civic-ai-tools/blob/main/CONTRIBUTING.md) for an overview of all four repos.
+
+## Legal: sign-off and IPR
+
+- Every contribution requires a Developer Certificate of Origin sign-off: commit with `git commit -s`, which adds a `Signed-off-by: Your Name <email>` line. What that certifies, and the project-wide policy: [IPR.md](https://github.com/npstorey/civic-ai-tools/blob/main/IPR.md) (hub repo; adopted per [ADR-0017](https://github.com/npstorey/civic-ai-tools/blob/main/docs/adr/0017-ipr-posture-dco-rf-statement.md)).
+- The project's patent posture is the royalty-free statement at [PATENTS.md](https://github.com/npstorey/civic-ai-tools/blob/main/PATENTS.md).
 
 ## License
 
