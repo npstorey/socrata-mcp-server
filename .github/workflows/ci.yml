@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# Credential-free by construction: this workflow never reads the repo's
+# secrets store. Only actions/checkout and actions/setup-node are used —
+# both first-party GitHub actions — and the default GITHUB_TOKEN is scoped
+# to read-only below.
+permissions:
+  contents: read
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # No .nvmrc / .node-version / engines upper bound in this repo
+          # (engines.node is only ">=18.0.0"); pinned to the current Node LTS.
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        # `npm run build` (clean && prebuild-check && build:tsc) is the local
+        # dev command, but `prebuild-check` is a diagnostic-only step that
+        # dumps `npm ls`, a recursive `ls`, `cat`, and `find` over the
+        # installed @modelcontextprotocol/sdk package (~1,100 lines of
+        # output, verified locally) purely for human debugging. It produces
+        # no build artifacts and touches nothing but files already pinned by
+        # package-lock.json, so `npm ci` has already guaranteed the SDK is
+        # present at the locked version before this step runs; if it were
+        # somehow missing, `build:tsc` would fail on its own with a module
+        # resolution error. Running it here would only add log noise, so CI
+        # runs `clean` + `build:tsc` directly instead.
+        run: npm run clean && npm run build:tsc
+
+      - name: Test
+        # `test:integration` (RUN_INTEGRATION=1) hits the live Socrata API
+        # and is intentionally excluded — `npm test` runs plain `vitest run`,
+        # which only picks up src/**/*.test.ts and test/**/*.test.ts.
+        # integration.test.ts skips itself via `describe.skipIf(!RUN_INTEGRATION)`,
+        # so no env var needs to be set here; verified locally that the full
+        # suite passes with a completely empty environment.
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
