@@ -1,0 +1,46 @@
+# Mirror of the Render dashboard configuration for this repo's web service
+# (service id srv-d0dneb9r0fns739eei10), read from the dashboard 2026-08-08.
+#
+# DOCUMENTATION-AS-CODE, NOT LIVE CONFIG: Render does not automatically apply
+# this file to an existing dashboard-configured service. Per Render's Blueprint
+# docs, an existing service adopts a render.yaml only when it is explicitly
+# synced as a Blueprint in the Render UI (resources are matched by `name`).
+# Until that adoption step happens, this file records the deploy configuration
+# in-repo so it is reviewable, diffable, and survives the dashboard.
+#
+# Internal address note: the service's INTERNAL hostname is
+# `opengov-mcp-server` (HTTP, port 10000) — it retains the service's original
+# name from before a display-name rename. That is correct as-is; do not "fix"
+# the `name` below or the internal hostname to match each other.
+#
+# Env vars are listed by NAME only (sync: false); values live in the Render
+# dashboard. A deploy hook also exists in the dashboard and is deliberately
+# not mirrored here — it is a secret-bearing URL.
+#
+# Added in the CI + dependency-budget sprint (civic-ai-tools#122 P4);
+# owner-supplied values, ORCH-applied.
+
+services:
+  - type: web
+    name: socrata-mcp-server
+    runtime: node
+    plan: standard # 1 CPU / 2 GB
+    region: oregon
+    branch: main
+    # Root Directory: unset in the dashboard (repo root); rootDir omitted.
+    buildCommand: npm install && npm run build
+    # Pre-deploy command: unset in the dashboard.
+    startCommand: npm run start
+    healthCheckPath: /healthz
+    autoDeploy: true # dashboard setting: "On Commit" (main)
+    domains:
+      - socrata-mcp.civicaitools.org
+    envVars:
+      - key: DATA_PORTAL_URL
+        sync: false
+      - key: NODE_VERSION
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: SOCRATA_APP_TOKEN
+        sync: false
