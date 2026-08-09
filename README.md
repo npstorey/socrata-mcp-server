@@ -66,6 +66,10 @@ SOCRATA_APP_TOKEN=                             # Optional Socrata app token, sen
 | `search` | Search for datasets or records, returns ID/score pairs |
 | `fetch` | Retrieve full dataset metadata or records by ID |
 
+### Skill guidance
+
+The server also serves composed skill guidance to clients via the MCP `prompts/get` endpoint (`skill-guidance` prompt). **`src/skills/*.ts` are generated, not authored here** — the source of truth is [`civic-ai-tools/docs/skills/`](https://github.com/npstorey/civic-ai-tools/tree/main/docs/skills), and that repo's CI byte-compares the two. Guidance changes start with a PR to that repo.
+
 ## Supported portals
 
 Works with any Socrata-powered open data portal. Some popular ones:
@@ -85,6 +89,8 @@ Works with any Socrata-powered open data portal. Some popular ones:
 
 The deployed instance at `https://socrata-mcp-server.onrender.com` powers [civicaitools.org](https://civicaitools.org).
 
+To run your own hosted instance, [`render.yaml`](render.yaml) mirrors the deployed instance's Render configuration and can be used as a Render Blueprint; any host that can run `npm run build && npm start` with `PORT` set will do.
+
 ## Development
 
 ```bash
@@ -96,10 +102,13 @@ npm run lint      # Lint
 
 ## Related projects
 
+This server is one of four repositories in the Civic AI Tools / Typed Standards project. Analyses run through it can be packaged as signed, independently verifiable evidence; [civic-ai-tools](https://github.com/npstorey/civic-ai-tools) is the hub for that architecture.
+
 | Repository | Description |
 |-----------|-------------|
 | [civic-ai-tools](https://github.com/npstorey/civic-ai-tools) | Starter project that bundles this server with Data Commons MCP for multi-source civic data queries |
 | [civic-ai-tools-website](https://github.com/npstorey/civic-ai-tools-website) | Demo website at [civicaitools.org](https://civicaitools.org) — side-by-side comparison of AI with and without live data |
+| [typedstandards](https://github.com/npstorey/typedstandards) | The Typed Standards home — verification/producer cores and [typedstandards.org](https://typedstandards.org) |
 | [odp-mcp](https://github.com/socrata/odp-mcp) | Socrata's official MCP server (similar functionality, different implementation) |
 
 ## Contributing
