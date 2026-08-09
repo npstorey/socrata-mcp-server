@@ -42,6 +42,7 @@ Test your changes by interacting with the server through Claude Desktop:
 
 - `src/index.ts` - MCP server initialization and request handling
 - `src/tools/socrata-tools.ts` - The unified `get_data` tool implementation
+- `src/skills/` - **generated; do not hand-edit.** Committed copies of `civic-ai-tools/docs/skills/{base,local,web}.md`, emitted by that repo's `scripts/check-skill-drift.mjs --emit`. The `civic-ai-tools` CI fails on any byte-level divergence. Edit the source in `civic-ai-tools` and land the regenerated copies here as a follow-up PR.
 - `src/utils/` - Helper functions and type definitions
 - `src/__tests__/` - Test files
 
