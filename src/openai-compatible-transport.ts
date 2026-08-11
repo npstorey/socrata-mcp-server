@@ -65,7 +65,7 @@ export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
     return `${ip}:${userAgent}`;
   }
 
-  async handleRequest(req: Request, res: Response): Promise<void> {
+  async handleRequest(req: Request, res: Response, parsedBody?: unknown): Promise<void> {
     console.log('[OpenAICompatibleTransport] handleRequest called');
     console.log('[OpenAICompatibleTransport] Method:', req.method);
     console.log('[OpenAICompatibleTransport] Headers:', {
@@ -85,16 +85,19 @@ export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
       console.log('[OpenAICompatibleTransport] POST request with body detected');
       console.log('[OpenAICompatibleTransport] Request body:', req.body);
       
-      // Parse the body to check if it's an initialize request
-      let parsedBody: any;
+      // Parse the body to check if it's an initialize request. A caller may
+      // hand us an already-parsed body (index.ts passes the raw text through);
+      // normalize either source to a parsed value.
+      let parsedMessage: any;
+      const bodySource = parsedBody !== undefined ? parsedBody : req.body;
       try {
-        parsedBody = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+        parsedMessage = typeof bodySource === 'string' ? JSON.parse(bodySource) : bodySource;
       } catch (e) {
         console.error('[OpenAICompatibleTransport] Failed to parse body:', e);
-        parsedBody = null;
+        parsedMessage = null;
       }
 
-      const isInitializeRequest = parsedBody && parsedBody.method === 'initialize';
+      const isInitializeRequest = parsedMessage && parsedMessage.method === 'initialize';
 
       // If no session ID is provided
       if (!sessionId) {
@@ -118,36 +121,22 @@ export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
         this.connectionSessions.set(connectionId, sessionId);
       }
 
-      // Create a new readable stream from the parsed body for the parent handler
-      const { Readable } = await import('stream');
-      const bodyStream = new Readable({
-        read() {
-          this.push(req.body);
-          this.push(null);
-        }
-      });
-      
-      // Create a proxy that combines request properties with stream behavior
-      const streamProxy = new Proxy(req, {
-        get(target, prop) {
-          // For stream-specific methods, use bodyStream
-          if (prop === 'on' || prop === 'once' || prop === 'emit' || prop === 'addListener' || prop === 'removeListener') {
-            return bodyStream[prop].bind(bodyStream);
-          }
-          // For stream state properties, return bodyStream's values
-          if (prop === 'readable' || prop === 'readableEnded' || prop === 'readableFlowing') {
-            return bodyStream[prop];
-          }
-          // For read method, use bodyStream
-          if (prop === 'read') {
-            return bodyStream.read.bind(bodyStream);
-          }
-          // For everything else (headers, method, url, body), use the original request
-          return target[prop];
-        }
-      });
-      
-      return super.handleRequest(streamProxy as any, res);
+      // Deliver the pre-parsed body through the SDK's supported `parsedBody`
+      // parameter instead of re-streaming it.
+      //
+      // History (#47): express.text() consumes the request stream before the
+      // transport sees it, so the original workaround (2025-07, ee33aff..
+      // 35aaad0) re-streamed the text through a Readable wrapped in a Proxy
+      // that impersonated the request's event/stream API. At SDK 1.30.0 the
+      // Node transport converts requests to web-standard Requests via
+      // @hono/node-server, which reads the underlying stream state rather
+      // than the event-API surface the Proxy faked - the re-streamed body
+      // arrived empty and every POST failed with "Parse error: Invalid JSON"
+      // (caught by src/__tests__/protocol-ceiling.test.ts, which drives this
+      // exact middleware chain). `parsedBody` is honored by handleRequest at
+      // both 1.15.1 and 1.30.0 and is the documented path for pre-consumed
+      // bodies, so the Readable/Proxy hack is gone.
+      return super.handleRequest(req, res, parsedMessage ?? undefined);
     }
     
     // For GET requests, also check for session injection
@@ -163,24 +152,29 @@ export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
     return super.handleRequest(req, res);
   }
 
-  // Override validateSession to allow initialize requests before server is initialized
-  protected validateSession(req: any, res: any): boolean {
-    // Check if this is an initialize request by peeking at the body
-    if (req.method === 'POST' && req.body) {
-      try {
-        const parsedBody = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-        if (parsedBody && parsedBody.method === 'initialize') {
-          // Allow initialize requests to bypass validation
-          return true;
-        }
-      } catch (e) {
-        // If we can't parse the body, fall back to default validation
-      }
-    }
-    
-    // For non-initialize requests, use default validation
-    return super.validateSession(req, res);
-  }
+  // NOTE(#47, scoping D8): a `validateSession` override lived here ("allow
+  // initialize requests to bypass validation before the server is initialized").
+  // It was removed as provably dead, on two independent grounds:
+  //
+  // 1. It never changed behavior. At SDK 1.15.1, `validateSession` is invoked
+  //    only for GET, DELETE, and non-initialize POST requests - the SDK skips
+  //    it for POST initialize natively (`if (!isInitializationRequest) { ...
+  //    validateSession ... }` in handlePostRequest). The override's only added
+  //    branch (return true when the POST body is an initialize request) was
+  //    therefore unreachable: on every path where validateSession runs, the
+  //    override fell through to `super.validateSession` unchanged.
+  //
+  // 2. At SDK 1.30.0 the member no longer exists to override. The Node
+  //    `StreamableHTTPServerTransport` is now a thin wrapper delegating to
+  //    `WebStandardStreamableHTTPServerTransport` (via @hono/node-server);
+  //    session validation lives inside the web-standard class (which still
+  //    bypasses it for initialize requests, same as 1.15.1). The subclass
+  //    method had silently detached, and its `super.validateSession(...)` call
+  //    would have thrown had anything invoked it.
+  //
+  // The rest of this class (header-less session injection, body re-streaming)
+  // remains live for legacy header-less clients; its fate is the v2/era
+  // migration's D8 decision (civic-ai-tools#131), not this hotfix's.
 
   close(): Promise<void> {
     this.sessionStore.clear();

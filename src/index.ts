@@ -19,41 +19,26 @@ import {
   handleFetchTool
 } from './tools/socrata-tools.js';
 import { z } from 'zod';
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+  InitializeRequestSchema,
+  ListPromptsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+  GetPromptRequestSchema,
+  type InitializeResult
+} from '@modelcontextprotocol/sdk/types.js';
 import { McpError, ErrorCode } from './utils/mcp-errors.js';
 import { BASE_SKILL } from './skills/base.js';
 import { WEB_SKILL } from './skills/web.js';
 import { LOCAL_SKILL } from './skills/local.js';
 
-// Workaround: Define schemas locally since they're not properly exported from SDK
-const ListPromptsRequestSchema = z.object({
-  method: z.literal("prompts/list"),
-  params: z.optional(z.object({
-    cursor: z.optional(z.string())
-  }))
-});
-
-const ListResourcesRequestSchema = z.object({
-  method: z.literal("resources/list"),
-  params: z.optional(z.object({
-    cursor: z.optional(z.string())
-  }))
-});
-
-const ReadResourceRequestSchema = z.object({
-  method: z.literal("resources/read"),
-  params: z.object({
-    uri: z.string()
-  })
-});
-
-const GetPromptRequestSchema = z.object({
-  method: z.literal("prompts/get"),
-  params: z.object({
-    name: z.string(),
-    arguments: z.optional(z.record(z.string()))
-  })
-});
+// NOTE(#47): the prompts/resources request schemas were previously hand-rolled
+// here behind a comment claiming they were "not properly exported from SDK".
+// They are exported (and were at 1.15.x too); the local copies were also what
+// blew up zod type inference (TS2589) once the `any`-typed SDK shim was
+// removed. Import the SDK's own schemas instead.
 
 dotenv.config();
 
@@ -67,13 +52,23 @@ async function createServer(transport?: OpenAICompatibleTransport): Promise<Serv
         tools: {},
         prompts: {},
         resources: { subscribe: false, listChanged: true },
-        roots: { listChanged: true },
-        sampling: {},
+        // NOTE(#47): `roots` and `sampling` were previously declared here.
+        // They are CLIENT capabilities (this server implements neither), and
+        // 1.30.0's ServerCapabilities type rejects them - the de-shimmed
+        // compiler surfaced the false advertisement (scoping report §3.4 on
+        // civic-ai-tools#131). Wire-invisible removal: the initialize response
+        // clients actually see is built by the hand-rolled handler below.
         experimental: {
-          elicit: true
+          // Experimental capability values are objects, not booleans
+          // (ServerCapabilities.experimental: Record<string, object>).
+          elicit: {}
         }
-      },
-      authMethods: []
+      }
+      // NOTE(#47): a former `authMethods: []` option was removed here. It has
+      // never been part of the SDK's ServerOptions at any 1.x version (zero
+      // occurrences in the SDK's types or runtime) - it was silently ignored.
+      // This server requires no auth; see the /.well-known handlers in
+      // startApp() for the explicit no-auth signal.
     }
   );
   
@@ -104,15 +99,6 @@ async function createServer(transport?: OpenAICompatibleTransport): Promise<Serv
 
   // Handle Initialize - OpenAI sends this first
   try {
-    const InitializeRequestSchema = z.object({
-      method: z.literal('initialize'),
-      params: z.object({
-        protocolVersion: z.string(),
-        capabilities: z.any().optional(),
-        clientInfo: z.any().optional()
-      })
-    });
-    
     server.setRequestHandler(InitializeRequestSchema, async (request) => {
       console.error('[Server - Initialize] Request received:', JSON.stringify(request, null, 2));
       const protocolVersion = request.params.protocolVersion || '2025-01-01';
@@ -142,24 +128,24 @@ async function createServer(transport?: OpenAICompatibleTransport): Promise<Serv
         }
       }
       
-      const response: any = {
+      // InitializeResult plus the non-standard sessionId this server has always
+      // echoed in the body for the OpenAI-connector handshake (Result schemas
+      // are passthrough, so the extra member is wire-legal).
+      // NOTE(#47): earlier revisions decorated each capability with an invented
+      // `supported: true` member (an OpenAI-connector-era artifact; `supported`
+      // exists at no MCP spec revision - capability PRESENCE is the signal).
+      // 1.30.0's strict ServerCapabilities type rejects it; the response now
+      // matches the constructor's declared capabilities above, which is what
+      // the SDK's own initialize handler would have sent.
+      const response: InitializeResult & { sessionId?: string } = {
         protocolVersion: protocolVersion,
         capabilities: {
-          tools: {
-            supported: true
-          },
-          prompts: {
-            supported: true
-          },
-          resources: {
-            supported: true,
-            listChanged: true
-          },
+          tools: {},
+          prompts: {},
+          resources: { subscribe: false, listChanged: true },
           logging: {},
           experimental: {
-            elicit: {
-              supported: true
-            }
+            elicit: {}
           }
         },
         serverInfo: {
@@ -700,6 +686,44 @@ async function startApp() {
         }
       });
     });
+
+    // --- Honest no-auth signal (#47; #44's dead "Authenticate" button) ---
+    // This server requires no authentication. MCP (2025-03-26 through
+    // 2025-11-25) has no positive "no auth required" advertisement; the spec's
+    // signal is absence: a server that never returns 401 and serves no
+    // RFC 9728 protected-resource metadata is unauthenticated. The SDK client
+    // enters its OAuth flow only on HTTP 401 (1.30.0 client/streamableHttp.js
+    // handles `response.status === 401`; client/auth.js drives discovery),
+    // and this server never sends one. The dead "Authenticate" button issue
+    // #44 records is client-side recovery UX after a failed connect - no
+    // server response can suppress it at the v1 SDK level; the protocol-
+    // ceiling bump removes the failure that triggered it.
+    //
+    // What can be made honest server-side: clients probing the OAuth
+    // discovery surface used to receive Express's HTML "Cannot GET/POST"
+    // pages ("Invalid OAuth error response ... <pre>Cannot POST /register</pre>"
+    // in #44's log). Answer those probes precisely instead: 404 - the correct
+    // "not a protected resource" signal - with an RFC 6749-shaped JSON error
+    // body stating that no auth exists here. Paths cover the 1.30.0 client's
+    // discovery ladder incl. its path-inserted/appended variants (RFC 9728
+    // protected-resource metadata, RFC 8414 authorization-server metadata,
+    // OIDC discovery, RFC 7591 dynamic client registration).
+    const noAuthProbePaths = [
+      '/.well-known/oauth-protected-resource',
+      '/.well-known/oauth-authorization-server',
+      '/.well-known/openid-configuration',
+      '/mcp/.well-known', // OIDC Discovery 1.0 style: appended after the resource path
+      '/register'
+    ];
+    for (const probePath of noAuthProbePaths) {
+      app.use(probePath, (_req, res) => {
+        res.status(404).json({
+          error: 'invalid_request',
+          error_description:
+            'This MCP server does not require authentication. There is no OAuth authorization server, protected-resource metadata, or client registration endpoint; connect without credentials.'
+        });
+      });
+    }
 
     // Remove old global transport creation - we'll create per-session instead
     // Helper function to create and setup a new transport/server pair
