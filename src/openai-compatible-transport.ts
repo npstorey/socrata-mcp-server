@@ -163,24 +163,29 @@ export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
     return super.handleRequest(req, res);
   }
 
-  // Override validateSession to allow initialize requests before server is initialized
-  protected validateSession(req: any, res: any): boolean {
-    // Check if this is an initialize request by peeking at the body
-    if (req.method === 'POST' && req.body) {
-      try {
-        const parsedBody = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-        if (parsedBody && parsedBody.method === 'initialize') {
-          // Allow initialize requests to bypass validation
-          return true;
-        }
-      } catch (e) {
-        // If we can't parse the body, fall back to default validation
-      }
-    }
-    
-    // For non-initialize requests, use default validation
-    return super.validateSession(req, res);
-  }
+  // NOTE(#47, scoping D8): a `validateSession` override lived here ("allow
+  // initialize requests to bypass validation before the server is initialized").
+  // It was removed as provably dead, on two independent grounds:
+  //
+  // 1. It never changed behavior. At SDK 1.15.1, `validateSession` is invoked
+  //    only for GET, DELETE, and non-initialize POST requests - the SDK skips
+  //    it for POST initialize natively (`if (!isInitializationRequest) { ...
+  //    validateSession ... }` in handlePostRequest). The override's only added
+  //    branch (return true when the POST body is an initialize request) was
+  //    therefore unreachable: on every path where validateSession runs, the
+  //    override fell through to `super.validateSession` unchanged.
+  //
+  // 2. At SDK 1.30.0 the member no longer exists to override. The Node
+  //    `StreamableHTTPServerTransport` is now a thin wrapper delegating to
+  //    `WebStandardStreamableHTTPServerTransport` (via @hono/node-server);
+  //    session validation lives inside the web-standard class (which still
+  //    bypasses it for initialize requests, same as 1.15.1). The subclass
+  //    method had silently detached, and its `super.validateSession(...)` call
+  //    would have thrown had anything invoked it.
+  //
+  // The rest of this class (header-less session injection, body re-streaming)
+  // remains live for legacy header-less clients; its fate is the v2/era
+  // migration's D8 decision (civic-ai-tools#131), not this hotfix's.
 
   close(): Promise<void> {
     this.sessionStore.clear();
