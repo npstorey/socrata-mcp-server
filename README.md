@@ -15,6 +15,8 @@ This server gives AI assistants (Claude, Copilot, Cursor, Codex) direct access t
 
 ## Quick start
 
+**Requires Node.js 22 or newer** (see [`.node-version`](.node-version)). The MCP SDK's HTTP transport relies on the global `crypto`, which Node 18 and earlier don't expose without a flag — on those versions every request fails at runtime rather than at install time.
+
 ### Use with npx (no install needed)
 
 ```bash
@@ -89,7 +91,7 @@ Works with any Socrata-powered open data portal. Some popular ones:
 
 The deployed instance at `https://socrata-mcp-server.onrender.com` powers [civicaitools.org](https://civicaitools.org).
 
-To run your own hosted instance, [`render.yaml`](render.yaml) mirrors the deployed instance's Render configuration and can be used as a Render Blueprint; any host that can run `npm run build && npm start` with `PORT` set will do.
+To run your own hosted instance, [`render.yaml`](render.yaml) mirrors the deployed instance's Render configuration and can be used as a Render Blueprint; any host that can run `npm run build && npm start` on Node 22+ with `PORT` set will do.
 
 ## Development
 
