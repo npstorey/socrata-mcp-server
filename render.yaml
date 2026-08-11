@@ -38,6 +38,19 @@ services:
     envVars:
       - key: DATA_PORTAL_URL
         sync: false
+      # REQUIRED VALUE: 22 (dashboard). Do not lower this below 22, and never
+      # onto the Node 18 line. @modelcontextprotocol/sdk's Streamable HTTP
+      # transport bridges Node->Web via @hono/node-server and then calls the
+      # *global* `crypto` (WebStandardStreamableHTTPServerTransport ->
+      # `crypto.randomUUID()`); that global is behind the
+      # `--experimental-global-webcrypto` flag until Node 19, and
+      # @hono/node-server itself declares `engines.node: ">=20"`.
+      # On 2026-08-11 this service was still on the 18 line and every POST /mcp
+      # returned `-32700 Parse error: ReferenceError: crypto is not defined`,
+      # taking civicaitools.org's tool calls down until NODE_VERSION was set to
+      # 22 (socrata-mcp-server#47). This env var OUTRANKS the repo's
+      # .node-version file in Render's precedence order, so the committed file
+      # cannot protect this service — this value is the control.
       - key: NODE_VERSION
         sync: false
       - key: REDIS_URL

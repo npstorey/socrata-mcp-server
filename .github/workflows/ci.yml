@@ -21,9 +21,14 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # No .nvmrc / .node-version / engines upper bound in this repo
-          # (engines.node is only ">=18.0.0"); pinned to the current Node LTS.
-          node-version: 22
+          # Read from the committed .node-version so CI, local dev, and the
+          # deployed runtime share one number instead of drifting apart.
+          # (setup-node accepts .node-version / .nvmrc / package.json /
+          # .tool-versions here; an explicit `node-version:` would override
+          # this file, so deliberately don't set one.) Keep this at or above
+          # package.json's engines.node floor — see .node-version and
+          # render.yaml for why that floor exists.
+          node-version-file: .node-version
           cache: npm
 
       - name: Install dependencies
