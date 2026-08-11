@@ -15,6 +15,16 @@ import { handleSearch } from './search.js';
 import { retrieveDocuments } from './document-retrieval.js';
 // import { McpToolHandlerContext } from '@modelcontextprotocol/sdk/types.js'; // Removed incorrect import
 
+/**
+ * The SDK's `Tool` type describes only the wire shape returned by tools/list;
+ * it has no handler member. This repo keeps each tool's implementation next to
+ * its wire definition, so pair them in a local type (#47). The handler is
+ * invoked from src/index.ts and is never included in tools/list responses.
+ */
+export type ToolWithHandler = Tool & {
+  handler: (params: Record<string, unknown>) => Promise<unknown>;
+};
+
 // Get the default domain from environment
 const getDefaultDomain = () => {
   const url = process.env.DATA_PORTAL_URL || 'https://data.cityofnewyork.us';
@@ -420,7 +430,7 @@ const fetchJsonParameters: any = {
 };
 
 // 3️⃣ Tool uses the manually crafted JSON schema
-export const UNIFIED_SOCRATA_TOOL: Tool = {
+export const UNIFIED_SOCRATA_TOOL: ToolWithHandler = {
   name: 'get_data',
   description: 'A unified tool to interact with Socrata open-data portals.',
   inputSchema: jsonParameters,  // Latest MCP spec uses 'inputSchema'
@@ -430,7 +440,7 @@ export const UNIFIED_SOCRATA_TOOL: Tool = {
 };
 
 // New search tool that returns only id/score pairs
-export const SEARCH_TOOL: Tool = {
+export const SEARCH_TOOL: ToolWithHandler = {
   name: 'search',
   title: 'Search NYC Open Data',
   description: 'Search NYC Open Data portal and return matching dataset IDs',
@@ -439,7 +449,7 @@ export const SEARCH_TOOL: Tool = {
 };
 
 // New document retrieval tool
-export const FETCH_TOOL: Tool = {
+export const FETCH_TOOL: ToolWithHandler = {
   name: 'fetch',
   title: 'Fetch NYC Data Document',
   description: 'Retrieve full dataset metadata or record content from NYC Open Data portal',
