@@ -65,7 +65,7 @@ export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
     return `${ip}:${userAgent}`;
   }
 
-  async handleRequest(req: Request, res: Response): Promise<void> {
+  async handleRequest(req: Request, res: Response, parsedBody?: unknown): Promise<void> {
     console.log('[OpenAICompatibleTransport] handleRequest called');
     console.log('[OpenAICompatibleTransport] Method:', req.method);
     console.log('[OpenAICompatibleTransport] Headers:', {
@@ -85,16 +85,19 @@ export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
       console.log('[OpenAICompatibleTransport] POST request with body detected');
       console.log('[OpenAICompatibleTransport] Request body:', req.body);
       
-      // Parse the body to check if it's an initialize request
-      let parsedBody: any;
+      // Parse the body to check if it's an initialize request. A caller may
+      // hand us an already-parsed body (index.ts passes the raw text through);
+      // normalize either source to a parsed value.
+      let parsedMessage: any;
+      const bodySource = parsedBody !== undefined ? parsedBody : req.body;
       try {
-        parsedBody = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+        parsedMessage = typeof bodySource === 'string' ? JSON.parse(bodySource) : bodySource;
       } catch (e) {
         console.error('[OpenAICompatibleTransport] Failed to parse body:', e);
-        parsedBody = null;
+        parsedMessage = null;
       }
 
-      const isInitializeRequest = parsedBody && parsedBody.method === 'initialize';
+      const isInitializeRequest = parsedMessage && parsedMessage.method === 'initialize';
 
       // If no session ID is provided
       if (!sessionId) {
@@ -118,36 +121,22 @@ export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
         this.connectionSessions.set(connectionId, sessionId);
       }
 
-      // Create a new readable stream from the parsed body for the parent handler
-      const { Readable } = await import('stream');
-      const bodyStream = new Readable({
-        read() {
-          this.push(req.body);
-          this.push(null);
-        }
-      });
-      
-      // Create a proxy that combines request properties with stream behavior
-      const streamProxy = new Proxy(req, {
-        get(target, prop) {
-          // For stream-specific methods, use bodyStream
-          if (prop === 'on' || prop === 'once' || prop === 'emit' || prop === 'addListener' || prop === 'removeListener') {
-            return bodyStream[prop].bind(bodyStream);
-          }
-          // For stream state properties, return bodyStream's values
-          if (prop === 'readable' || prop === 'readableEnded' || prop === 'readableFlowing') {
-            return bodyStream[prop];
-          }
-          // For read method, use bodyStream
-          if (prop === 'read') {
-            return bodyStream.read.bind(bodyStream);
-          }
-          // For everything else (headers, method, url, body), use the original request
-          return target[prop];
-        }
-      });
-      
-      return super.handleRequest(streamProxy as any, res);
+      // Deliver the pre-parsed body through the SDK's supported `parsedBody`
+      // parameter instead of re-streaming it.
+      //
+      // History (#47): express.text() consumes the request stream before the
+      // transport sees it, so the original workaround (2025-07, ee33aff..
+      // 35aaad0) re-streamed the text through a Readable wrapped in a Proxy
+      // that impersonated the request's event/stream API. At SDK 1.30.0 the
+      // Node transport converts requests to web-standard Requests via
+      // @hono/node-server, which reads the underlying stream state rather
+      // than the event-API surface the Proxy faked - the re-streamed body
+      // arrived empty and every POST failed with "Parse error: Invalid JSON"
+      // (caught by src/__tests__/protocol-ceiling.test.ts, which drives this
+      // exact middleware chain). `parsedBody` is honored by handleRequest at
+      // both 1.15.1 and 1.30.0 and is the documented path for pre-consumed
+      // bodies, so the Readable/Proxy hack is gone.
+      return super.handleRequest(req, res, parsedMessage ?? undefined);
     }
     
     // For GET requests, also check for session injection
