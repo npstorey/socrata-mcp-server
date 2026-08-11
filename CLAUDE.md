@@ -23,7 +23,7 @@ npm test          # Run tests (vitest)
 
 - `src/index.ts` — Server entry point, tool/prompt/resource handlers
 - `src/mcp/tools/socrata.ts` — Socrata API tool implementations
-- `src/mcp/transport/streamableHttp.ts` — HTTP transport with session management
+- `src/openai-compatible-transport.ts` — HTTP transport wrapper (session injection for header-less clients) over the SDK's Streamable HTTP transport
 - `src/tools/socrata-tools.ts` — Tool schema definitions
 - `src/utils/api.ts` — Socrata API client
 - `src/utils/portal-info.ts` — Portal metadata utilities
