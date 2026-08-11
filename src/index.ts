@@ -687,6 +687,44 @@ async function startApp() {
       });
     });
 
+    // --- Honest no-auth signal (#47; #44's dead "Authenticate" button) ---
+    // This server requires no authentication. MCP (2025-03-26 through
+    // 2025-11-25) has no positive "no auth required" advertisement; the spec's
+    // signal is absence: a server that never returns 401 and serves no
+    // RFC 9728 protected-resource metadata is unauthenticated. The SDK client
+    // enters its OAuth flow only on HTTP 401 (1.30.0 client/streamableHttp.js
+    // handles `response.status === 401`; client/auth.js drives discovery),
+    // and this server never sends one. The dead "Authenticate" button issue
+    // #44 records is client-side recovery UX after a failed connect - no
+    // server response can suppress it at the v1 SDK level; the protocol-
+    // ceiling bump removes the failure that triggered it.
+    //
+    // What can be made honest server-side: clients probing the OAuth
+    // discovery surface used to receive Express's HTML "Cannot GET/POST"
+    // pages ("Invalid OAuth error response ... <pre>Cannot POST /register</pre>"
+    // in #44's log). Answer those probes precisely instead: 404 - the correct
+    // "not a protected resource" signal - with an RFC 6749-shaped JSON error
+    // body stating that no auth exists here. Paths cover the 1.30.0 client's
+    // discovery ladder incl. its path-inserted/appended variants (RFC 9728
+    // protected-resource metadata, RFC 8414 authorization-server metadata,
+    // OIDC discovery, RFC 7591 dynamic client registration).
+    const noAuthProbePaths = [
+      '/.well-known/oauth-protected-resource',
+      '/.well-known/oauth-authorization-server',
+      '/.well-known/openid-configuration',
+      '/mcp/.well-known', // OIDC Discovery 1.0 style: appended after the resource path
+      '/register'
+    ];
+    for (const probePath of noAuthProbePaths) {
+      app.use(probePath, (_req, res) => {
+        res.status(404).json({
+          error: 'invalid_request',
+          error_description:
+            'This MCP server does not require authentication. There is no OAuth authorization server, protected-resource metadata, or client registration endpoint; connect without credentials.'
+        });
+      });
+    }
+
     // Remove old global transport creation - we'll create per-session instead
     // Helper function to create and setup a new transport/server pair
     async function createTransportAndServer(sessionId?: string) {
