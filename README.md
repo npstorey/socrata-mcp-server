@@ -58,6 +58,7 @@ npm run dev   # Starts on http://localhost:10000 (with PORT=10000 from .env)
 PORT=10000                                     # Project convention (local dev + Render). The code falls back to 8000 if PORT is unset.
 DATA_PORTAL_URL=https://data.cityofnewyork.us  # Default portal (optional)
 SOCRATA_APP_TOKEN=                             # Optional Socrata app token, sent as X-App-Token on portal requests for higher rate limits. Without it, portals apply stricter anonymous throttling.
+SKILL_POSTURE=                                 # Optional skill-guidance posture. Unset: generic web overlay only. `reference-demo`: appends the demo-posture overlay (demo limits + CTA) for web modality. See https://github.com/npstorey/civic-ai-tools/blob/main/docs/skills/README.md for the composition model.
 ```
 
 ## Available tools
@@ -91,7 +92,7 @@ Works with any Socrata-powered open data portal. Some popular ones:
 
 The deployed instance at `https://socrata-mcp-server.onrender.com` powers [civicaitools.org](https://civicaitools.org).
 
-To run your own hosted instance, [`render.yaml`](render.yaml) mirrors the deployed instance's Render configuration and can be used as a Render Blueprint; any host that can run `npm run build && npm start` on Node 22+ with `PORT` set will do.
+To run your own hosted instance, [`render.yaml`](render.yaml) mirrors the deployed instance's Render configuration and can be used as a Render Blueprint; any host that can run `npm run build && npm start` on Node 22+ with `PORT` set will do. If you fork from `render.yaml`, you **must** change its `name:` and `domains:` values — they belong to the reference deployment. The optional `SKILL_POSTURE` env var (see [Environment variables](#environment-variables)) controls whether the reference-demo posture overlay is appended to the web skill guidance; leave it unset for a generic deployment.
 
 ## Development
 

@@ -41,6 +41,7 @@ npm test          # Run tests (vitest)
 ```bash
 PORT=10000
 DATA_PORTAL_URL=https://data.cityofnewyork.us
+SKILL_POSTURE=       # Optional. Unset -> generic web skill overlay; `reference-demo` -> demo-posture overlay appended for web modality (the reference deployment sets this). Unrecognized values fail open to generic with a logged warning.
 ```
 
 ## Deployment

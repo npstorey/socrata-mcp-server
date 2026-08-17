@@ -30,9 +30,7 @@ import {
   type InitializeResult
 } from '@modelcontextprotocol/sdk/types.js';
 import { McpError, ErrorCode } from './utils/mcp-errors.js';
-import { BASE_SKILL } from './skills/base.js';
-import { WEB_SKILL } from './skills/web.js';
-import { LOCAL_SKILL } from './skills/local.js';
+import { composeSkillGuidance } from './skills/compose.js';
 
 // NOTE(#47): the prompts/resources request schemas were previously hand-rolled
 // here behind a comment claiming they were "not properly exported from SDK".
@@ -279,17 +277,20 @@ async function createServer(transport?: OpenAICompatibleTransport): Promise<Serv
     if (promptName === 'skill-guidance') {
       // Determine modality: explicit arg > transport inference
       const modality = args?.modality || (isHttpTransport ? 'web' : 'local');
-      const overlay = modality === 'web' ? WEB_SKILL : LOCAL_SKILL;
-      console.error(`[Server - GetPrompt] Composing skill-guidance with modality: ${modality}`);
+      const composition = composeSkillGuidance(modality, process.env.SKILL_POSTURE);
+      if (composition.warning) {
+        console.error(`[Server - GetPrompt] ${composition.warning}`);
+      }
+      console.error(`[Server - GetPrompt] Composing skill-guidance with modality: ${modality}, posture: ${composition.postureDecision}`);
 
       return {
-        description: `Socrata query skill guidance (${modality} mode)`,
+        description: `Socrata query skill guidance (${modality} mode${composition.postureApplied ? ', reference-demo posture' : ''})`,
         messages: [
           {
             role: 'user' as const,
             content: {
               type: 'text' as const,
-              text: BASE_SKILL + '\n\n---\n\n' + overlay
+              text: composition.text
             }
           }
         ]
@@ -1245,6 +1246,6 @@ if (process.argv.includes('--stdio')) {
     }
   })();
 } else {
-  // HTTP mode for web clients (Vercel deployment)
+  // HTTP mode for hosted deployments (the reference deployment runs on Render)
   startApp().catch(console.error);
 }

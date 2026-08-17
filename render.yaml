@@ -22,6 +22,11 @@
 
 services:
   - type: web
+    # REFERENCE-DEPLOYMENT VALUE — MUST CHANGE ON FORK: `name` (and `domains`
+    # below) are the reference deployment's values. If you use this file as a
+    # Blueprint for your own fork, set your own service name and domains; do
+    # not deploy under these. (The name/internal-hostname mismatch note above
+    # still applies to the reference deployment only.)
     name: socrata-mcp-server
     runtime: node
     plan: standard # 1 CPU / 2 GB
@@ -33,6 +38,9 @@ services:
     startCommand: npm run start
     healthCheckPath: /healthz
     autoDeploy: true # dashboard setting: "On Commit" (main)
+    # REFERENCE-DEPLOYMENT VALUE — MUST CHANGE ON FORK: this domain belongs to
+    # the reference deployment. Forks must replace it with their own domain (or
+    # remove the block to use the Render-issued onrender.com hostname).
     domains:
       - socrata-mcp.civicaitools.org
     envVars:
@@ -54,6 +62,14 @@ services:
       - key: NODE_VERSION
         sync: false
       - key: REDIS_URL
+        sync: false
+      # Skill-guidance posture knob (sprint-154; set at that sprint's deploy
+      # gate). Unset -> the server serves the generic web overlay only;
+      # `reference-demo` -> the demo-posture overlay (demo limits + local-tools
+      # CTA) is appended after the web overlay for web modality. The reference
+      # deployment's dashboard value is `reference-demo`. Forks: leave unset
+      # unless you author your own posture.
+      - key: SKILL_POSTURE
         sync: false
       - key: SOCRATA_APP_TOKEN
         sync: false
