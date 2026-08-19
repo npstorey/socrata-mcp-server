@@ -90,7 +90,9 @@ Works with any Socrata-powered open data portal. Some popular ones:
 - **stdio** — For local use with Claude Code, Cursor, and VS Code Copilot
 - **HTTP (Streamable HTTP)** — For web applications. Endpoint: `POST /mcp`
 
-The deployed instance at `https://socrata-mcp-server.onrender.com` powers [civicaitools.org](https://civicaitools.org).
+The deployed instance at `https://socrata-mcp.civicaitools.org/mcp` powers [civicaitools.org](https://civicaitools.org). (Its Render-issued hostname is `opengov-mcp-server.onrender.com` — the service keeps its pre-rename name, as [`render.yaml`](render.yaml) notes.)
+
+That endpoint is watched by a scheduled [deployed-endpoint smoke](.github/workflows/deployed-endpoint-smoke.yml): a daily MCP handshake at the current protocol revision, run against the live service. It exists because the two outages this server has had — a protocol-ceiling skew ([#44](https://github.com/npstorey/socrata-mcp-server/issues/44)) and a Node-runtime floor ([#47](https://github.com/npstorey/socrata-mcp-server/issues/47)) — were both host-side drift with no commit behind them, invisible to the unit suite by construction. Run it yourself with `npm run smoke:deployed`, or against another instance with `SMOKE_MCP_URL=https://your-host/mcp npm run smoke:deployed`. No credentials needed; this server requires no authentication.
 
 To run your own hosted instance, [`render.yaml`](render.yaml) mirrors the deployed instance's Render configuration and can be used as a Render Blueprint; any host that can run `npm run build && npm start` on Node 22+ with `PORT` set will do. If you fork from `render.yaml`, you **must** change its `name:` and `domains:` values — they belong to the reference deployment. The optional `SKILL_POSTURE` env var (see [Environment variables](#environment-variables)) controls whether the reference-demo posture overlay is appended to the web skill guidance; leave it unset for a generic deployment.
 

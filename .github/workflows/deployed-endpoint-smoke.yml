@@ -1,0 +1,95 @@
+name: Deployed endpoint smoke
+
+# WHAT THIS WATCHES: the LIVE hosted /mcp endpoint, not the code in this repo.
+# It runs an MCP handshake at the current protocol revision against the running
+# service and fails if the service no longer speaks it. See
+# scripts/smoke-deployed-endpoint.mjs for the exchange and the assertions.
+#
+# WHY IT IS NOT A push/pull_request CHECK — deliberate, load-bearing:
+#   1. The state it measures is orthogonal to the diff. A PR that changes a
+#      README cannot fix or break the deployed endpoint, and the deploy of a
+#      merged PR has not happened yet when its checks run.
+#   2. The breakage class is Render-side drift with no commit behind it:
+#      #44 (the deployed SDK's protocol ceiling fell behind current clients)
+#      and #47 (Render's NODE_VERSION env var sat on the Node 18 line, which
+#      OUTRANKS the committed .node-version, so no in-repo file could have
+#      protected it). Neither had a triggering commit here.
+#   3. A red X on unrelated PRs for a transient Render/Cloudflare blip is how
+#      you train reviewers to ignore CI. This workflow's red must mean "the
+#      deployed endpoint is broken" and nothing else — which is also why the
+#      script retries transport-level flakes before reporting failure, and
+#      why a failed session-close is only a warning.
+#
+# The code on main is guarded separately, and on every PR, by
+# src/__tests__/protocol-ceiling.test.ts inside the `build-test-lint` job.
+
+on:
+  schedule:
+    # 06:17 UTC daily.
+    #   - DAILY: the two known drifts were each invisible until a human tried a
+    #     query. Daily bounds worst-case time-to-discovery at ~24h, which is the
+    #     useful threshold here — this endpoint backs a public demo, so a
+    #     multi-day silent outage is the outcome worth spending a minute of CI
+    #     a day to prevent. Faster buys little: Render drift arrives on deploys
+    #     and platform changes, not continuously.
+    #   - :17 NOT :00: GitHub queues scheduled workflows and delays or drops
+    #     runs that pile up at the top of the hour. An offset minute lands in a
+    #     quieter slot.
+    #   - 06:17 UTC ≈ 01:17/02:17 America/New_York: off-peak for the service,
+    #     and a failure notification is already waiting at the start of the day
+    #     rather than arriving mid-afternoon.
+    - cron: '17 6 * * *'
+
+  # Manual runs: for checking a suspected outage on demand, for probing a fork
+  # or the Render-issued origin hostname via the input below, and as the
+  # keep-alive escape hatch — GitHub disables scheduled workflows in a repo
+  # with 60 days of no commit activity, and a manual run re-enables them.
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: 'MCP endpoint URL to probe (blank = the reference deployment)'
+        required: false
+        default: ''
+
+# No push:, no pull_request:. See the rationale above before adding either.
+
+# Credential-free by construction, exactly as ci.yml is: this workflow reads no
+# secret and needs none — the server requires no authentication by design
+# (src/index.ts has no auth middleware and never returns 401). Only first-party
+# actions are used, and the default GITHUB_TOKEN is read-only.
+permissions:
+  contents: read
+
+# One at a time. Overlapping runs would each allocate a session on the live
+# service; serializing keeps the log unambiguous about which run saw what.
+concurrency:
+  group: deployed-endpoint-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    # The whole handshake is three requests. If it has not finished in five
+    # minutes something is wrong in a way the script's own 30s-per-request
+    # timeouts did not catch, and hanging the runner helps nobody.
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Same committed .node-version as ci.yml, so the smoke runs on the
+          # runtime the project targets. No `cache: npm` here: this job runs no
+          # `npm ci`, so there is nothing to restore and the cache step would
+          # only add time.
+          node-version-file: .node-version
+
+      # No install step. The script has zero dependencies and uses global fetch
+      # on the repo's Node floor (>=22). That is the point: a registry outage or
+      # a broken build must never turn this monitor red, because neither has
+      # anything to do with whether the deployed endpoint is up.
+      - name: MCP handshake against the deployed endpoint
+        env:
+          # Empty on scheduled runs, so the script falls back to its default.
+          SMOKE_MCP_URL: ${{ inputs.endpoint }}
+        run: node scripts/smoke-deployed-endpoint.mjs
