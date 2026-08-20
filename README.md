@@ -107,7 +107,7 @@ npm run lint      # Lint
 
 ## Related projects
 
-This server is one of four repositories in the Civic AI Tools / Typed Standards project. Analyses run through it can be packaged as signed, independently verifiable evidence; [civic-ai-tools](https://github.com/npstorey/civic-ai-tools) is the hub for that architecture.
+This server is one of four repositories in the Civic AI Tools / Typed Standards project. Analyses run through it can be packaged as a signed, independently verifiable record; [civic-ai-tools](https://github.com/npstorey/civic-ai-tools) is the hub for that architecture.
 
 | Repository | Description |
 |-----------|-------------|
