@@ -1,61 +1,80 @@
-# Claude Project Primer - Socrata MCP Server
+# CLAUDE.md — Socrata MCP Server
 
-## Project overview
+MCP server for open data on Socrata-powered portals. Two transports: stdio (local CLI
+clients) and Streamable HTTP (web clients). The reference deployment runs on Render at
+`https://socrata-mcp.civicaitools.org/mcp` and powers the live demo at civicaitools.org;
+its Render-issued hostname is still the pre-rename `opengov-mcp-server.onrender.com`.
 
-MCP server for accessing open data on Socrata-powered portals. Supports stdio and HTTP (Streamable HTTP) transports.
+Tool surface: `SOCRATA_TOOLS` in `src/tools/socrata-tools.ts`, registered in
+`src/index.ts`. Read those rather than a list here.
+<!-- the table this replaces named three tools and their purposes — a second copy of the schemas, with nothing keeping it honest -->
 
 ## Strategic context — what not to include in this repo
 
-This repo is public. Strategic and relationship context — specific external stakeholders, prospective collaborators, pre-meeting strategy, private outreach plans, named individuals' opinions or quotes — lives in local-only planning docs outside this repo (workspace `CLAUDE.md`, `ROADMAP.md`, per-user auto-memory), not here.
+This repo is public. Strategic and relationship context — named external stakeholders,
+prospective collaborators, pre-meeting strategy, private outreach plans, individuals'
+opinions or quotes — lives in local-only planning docs outside this repo, not here.
 
-When contributing code, docs, commit messages, issue bodies, PR descriptions, or starter prompts for implementation chats that will commit to this repo, use neutral phrasing: "an external stakeholder," "an upcoming demo," "a follow-up meeting" — not specific names. If a task prompt you received includes strategic context, scrub it before producing any content destined for this repo.
+In code, docs, commit messages, issue bodies, PR descriptions, or starter prompts
+destined for this repo, use neutral phrasing: "an external stakeholder," "an upcoming
+demo," "a follow-up meeting." Scrub strategic context out of a task prompt before
+producing anything that lands here.
+<!-- a public repo's history is permanent: an unannounced partner name cannot be taken back once pushed -->
 
-## Key commands
+## Build / test
 
-```bash
-npm run build     # Clean build (tsc)
-npm run dev       # Start locally on http://localhost:10000
-npm run start     # Production mode
-npm test          # Run tests (vitest)
-```
+Node is pinned in `.node-version` (22); CI reads that file. Under a version manager a
+non-interactive shell has no `node` on `PATH` — load it first: `eval "$(fnm env)" && fnm use 22`.
+<!-- the sibling repo's ts#52 gate: every step exited 127 on a green branch and was reported as a failing gate -->
 
-## Architecture
+The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
 
-- `src/index.ts` — Server entry point, tool/prompt/resource handlers
-- `src/mcp/tools/socrata.ts` — Socrata API tool implementations
-- `src/openai-compatible-transport.ts` — HTTP transport wrapper (session injection for header-less clients) over the SDK's Streamable HTTP transport
-- `src/tools/socrata-tools.ts` — Tool schema definitions
-- `src/utils/api.ts` — Socrata API client
-- `src/utils/portal-info.ts` — Portal metadata utilities
+- `npm run clean && npm run build:tsc` — `tsc --outDir dist`, silent on success. CI runs
+  those two pieces rather than `npm run build`, whose `prebuild-check` step dumps ~1,100
+  lines of SDK diagnostics and produces no artifacts.
+- `npm test` — `Test Files 15 passed | 2 skipped (17)`, `Tests 92 passed | 9 skipped (101)`.
+  The 9: 6 live-API integration tests behind `RUN_INTEGRATION=1` (`npm run
+  test:integration`), and 3 hardcoded `.skip`s in the transport-sequence tests.
+- `npm run lint` — a pass here is **`✖ 117 problems (0 errors, 117 warnings)`** with
+  exit 0. The warnings are pre-existing; don't clear them as a side effect of another
+  change.
+  <!-- measured 2026-08-22: a green lint here is not silent, and reading the ✖ line as failure invites an out-of-scope sweep -->
 
-## Tools
-
-| Tool | Purpose |
-|------|---------|
-| `get_data` | Unified access: catalog search, metadata, SoQL queries, metrics |
-| `search` | Search datasets/records, returns ID/score pairs |
-| `fetch` | Retrieve full metadata/records by ID |
+`npm run dev` runs the built `dist/` with dotenv loaded, so build first.
 
 ## Environment
 
-```bash
-PORT=10000
-DATA_PORTAL_URL=https://data.cityofnewyork.us
-SKILL_POSTURE=       # Optional. Unset -> generic web skill overlay; `reference-demo` -> demo-posture overlay appended for web modality (the reference deployment sets this). Unrecognized values fail open to generic with a logged warning.
-```
+- `DATA_PORTAL_URL` — **required**; any Socrata portal, e.g.
+  `https://data.cityofnewyork.us`. `src/utils/portal-info.ts` throws when it is unset.
+- `PORT` — HTTP transport port. Default **8000** in code (`src/index.ts`); the Render
+  deployment supplies its own.
+- `SKILL_POSTURE` — optional; deployment posture overlay. Semantics in
+  [`.claude/rules/skills.md`](.claude/rules/skills.md).
 
-## Deployment
+## Architecture
 
-- Deployed on Render: `https://socrata-mcp-server.onrender.com`
-- Powers the live demo at [civicaitools.org](https://civicaitools.org)
+- `src/index.ts` — entry point: tool/prompt/resource handlers, both transports.
+- `src/openai-compatible-transport.ts` — HTTP transport wrapper (session injection for
+  header-less clients) over the SDK's Streamable HTTP transport.
+- `src/skills/` — **generated; do not hand-edit.** The sync rule is in
+  [`.claude/rules/skills.md`](.claude/rules/skills.md).
+- `src/tools/`, `src/utils/`, `src/schema/` — tool schemas and handlers; Socrata API
+  client, cache and portal metadata; shared request schemas.
 
-## Architecture documentation
+Cross-repo architecture documents and spec drafts live in the hub repo at
+[`civic-ai-tools/docs/architecture/`](https://github.com/npstorey/civic-ai-tools/tree/main/docs/architecture)
+— this server is L1 of the standards stack. Before changing a tool schema or response
+shape, check whether the spec or that directory's `open-questions.md` constrains it.
+<!-- both spec drafts are internal working drafts; a shape changed here that the spec pins is a cross-repo break, and the check is cheap -->
 
-Cross-repo architecture documents and spec drafts live in the hub repo at [`civic-ai-tools/docs/architecture/`](https://github.com/npstorey/civic-ai-tools/tree/main/docs/architecture). The Typed Standards Specification governs the shape of record packages produced from MCP tool calls (this server is L1 of the standards stack — see `end-state-vision.md` §1). When changing tool schemas, response shapes, or trace-relevant attributes (`mcp.source`, etc.), check whether the change is constrained by spec sections or by open questions in [`open-questions.md`](https://github.com/npstorey/civic-ai-tools/blob/main/docs/architecture/open-questions.md). Both spec drafts are internal working drafts (pre-v0.1, not for external review). The project's working method for moving questions through to resolution is documented in [`working-method.md`](https://github.com/npstorey/civic-ai-tools/blob/main/docs/architecture/working-method.md) (companion to `xanadu-doctrine.md`); the third companion doctrine, [`chat-type-taxonomy.md`](https://github.com/npstorey/civic-ai-tools/blob/main/docs/architecture/chat-type-taxonomy.md), governs which kind of conversation (strategic, planning, orchestration, implementation, meta) is appropriate for which kind of work.
+## Merges and sign-off
+
+Work lands via PRs to `main`; never push to `main`. `git commit -s` on every commit —
+the `Signed-off-by:` email must match the commit author email exactly, or DCO fails
+(absence is not the only way to fail it). See [CONTRIBUTING.md](CONTRIBUTING.md).
+<!-- charter-5 in the sibling repo: two branches came back merge-blocked with CI otherwise green and had to be rebased with --signoff -->
 
 ## Related repos
 
-| Repo | Purpose |
-|------|---------|
-| [civic-ai-tools](https://github.com/npstorey/civic-ai-tools) | Starter project, MCP configs, skill docs |
-| [civic-ai-tools-website](https://github.com/npstorey/civic-ai-tools-website) | Demo website |
+[civic-ai-tools](https://github.com/npstorey/civic-ai-tools) — hub: skill sources, MCP configs,
+architecture docs. [civic-ai-tools-website](https://github.com/npstorey/civic-ai-tools-website) — the demo site.

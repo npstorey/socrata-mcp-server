@@ -100,6 +100,12 @@ Here are some areas where contributions would be particularly valuable:
 - Additional example use cases
 - Improved documentation
 
+## If you use Claude Code
+
+Cloning this repo installs its checked-in Claude Code configuration: `.claude/settings.json` (a network allowlist and a sandbox block), plus the agent definitions in `.claude/agents/` and the path-scoped rules in `.claude/rules/`.
+
+Those files are ordinary JSON and Markdown — read them before you trust them, the same as any other code you clone. Personal overrides belong in `.claude/settings.local.json`, which is gitignored.
+
 ## This is a multi-repo project
 
 This MCP server is one part of a larger project. If you're unsure where to contribute, see the [civic-ai-tools CONTRIBUTING guide](https://github.com/npstorey/civic-ai-tools/blob/main/CONTRIBUTING.md) for an overview of all four repos.

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "sandbox": {
+    "_shakedown": "Measured 2026-08-22 with enabled:true committed. The sandbox never reached the check set: it failed to initialize, verbatim — `Sandbox is enabled but failed to initialize: EPERM: operation not permitted, listen '/tmp/claude-501/srt-mux-<pid>-1.sock'. Sandboxing is disabled for the rest of this session; restart to retry.` Reproduced twice with different pids, so it is not a stale-socket collision; /tmp/claude-501 is 0700, so it is not a directory-permission problem either. Hence enabled:false. TWO CAVEATS BEFORE YOU FLIP IT BACK. (1) Both measurements ran in a NESTED session (`claude -p` spawned from inside another session), because a top-level session reads sandbox settings only at startup — writing this file mid-session does not activate it (probed: a non-allowlisted domain still resolved 200). A fresh top-level session may well initialize cleanly. (2) This repo had no trust record in ~/.claude.json at the time, so a nested run rooted here ignored this file entirely; the quoted failure was captured in the sibling typedstandards repo, which was trusted, against an identical sandbox block. To re-measure: start a fresh session here with enabled:true, accept the trust prompt, run `npm ci` then the three CI gates in CLAUDE.md, and record the result. Do not measure by flipping the setting inside a running session — enabling once is sticky for the rest of it. The allowlist and excludedCommands below are unmeasured for the same reason.",
+    "enabled": false,
+    "allowUnsandboxedCommands": false,
+    "excludedCommands": ["gh *", "git *"],
+    "filesystem": {
+      "allowWrite": ["~/.npm"]
+    },
+    "network": {
+      "allowedDomains": [
+        "registry.npmjs.org",
+        "github.com",
+        "api.github.com",
+        "objects.githubusercontent.com",
+        "codeload.github.com",
+        "data.cityofnewyork.us"
+      ]
+    }
+  }
+}
