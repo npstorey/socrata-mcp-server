@@ -7,7 +7,6 @@ its Render-issued hostname is still the pre-rename `opengov-mcp-server.onrender.
 
 Tool surface: `SOCRATA_TOOLS` in `src/tools/socrata-tools.ts`, registered in
 `src/index.ts`. Read those rather than a list here.
-<!-- the table this replaces named three tools and their purposes — a second copy of the schemas, with nothing keeping it honest -->
 
 ## Strategic context — what not to include in this repo
 
@@ -19,7 +18,14 @@ In code, docs, commit messages, issue bodies, PR descriptions, or starter prompt
 destined for this repo, use neutral phrasing: "an external stakeholder," "an upcoming
 demo," "a follow-up meeting." Scrub strategic context out of a task prompt before
 producing anything that lands here.
-<!-- a public repo's history is permanent: an unannounced partner name cannot be taken back once pushed -->
+
+## Secret hygiene
+
+Never `cat`, `head`, `tail`, or otherwise dump `.env*`, `auth.json`, `credentials*`, `*.pem`,
+`*.key`, or anything under `~/.ssh` or `~/.aws`. Two reads are permitted: a field-scoped read
+by key **name** (`grep '^VAR_NAME=' .env.local`), or a command the tool itself exposes. Never
+load-and-print a credentials file, even through a redaction filter.
+<!-- civic-ai-tools#174: a redaction filter one nesting level too high printed a live bearer token in full; rotation took a server-side revoke, not a local logout -->
 
 ## Build / test
 
@@ -63,18 +69,12 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
 
 Cross-repo architecture documents and spec drafts live in the hub repo at
 [`civic-ai-tools/docs/architecture/`](https://github.com/npstorey/civic-ai-tools/tree/main/docs/architecture)
-— this server is L1 of the standards stack. Before changing a tool schema or response
-shape, check whether the spec or that directory's `open-questions.md` constrains it.
-<!-- both spec drafts are internal working drafts; a shape changed here that the spec pins is a cross-repo break, and the check is cheap -->
+— this server is L1 of the standards stack; the hub also holds skill sources and MCP configs, and
+[civic-ai-tools-website](https://github.com/npstorey/civic-ai-tools-website) is the demo site. Before
+changing a tool schema or response shape, check whether the spec or `open-questions.md` constrains it.
 
 ## Merges and sign-off
 
 Work lands via PRs to `main`; never push to `main`. `git commit -s` on every commit —
 the `Signed-off-by:` email must match the commit author email exactly, or DCO fails
 (absence is not the only way to fail it). See [CONTRIBUTING.md](CONTRIBUTING.md).
-<!-- charter-5 in the sibling repo: two branches came back merge-blocked with CI otherwise green and had to be rebased with --signoff -->
-
-## Related repos
-
-[civic-ai-tools](https://github.com/npstorey/civic-ai-tools) — hub: skill sources, MCP configs,
-architecture docs. [civic-ai-tools-website](https://github.com/npstorey/civic-ai-tools-website) — the demo site.
