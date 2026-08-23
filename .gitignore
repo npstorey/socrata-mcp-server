@@ -39,3 +39,6 @@ temp/
 
 # Documentation (downloaded from external sources)
 docs/
+
+# Local Claude Code settings (machine-specific; not for the repo)
+.claude/settings.local.json
