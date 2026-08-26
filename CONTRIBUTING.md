@@ -110,10 +110,31 @@ Those files are ordinary JSON and Markdown — read them before you trust them, 
 
 This MCP server is one part of a larger project. If you're unsure where to contribute, see the [civic-ai-tools CONTRIBUTING guide](https://github.com/npstorey/civic-ai-tools/blob/main/CONTRIBUTING.md) for an overview of all four repos.
 
-## Legal: sign-off and IPR
+## Commits, signing, and how we merge
 
-- Every contribution requires a Developer Certificate of Origin sign-off: commit with `git commit -s`, which adds a `Signed-off-by: Your Name <email>` line. What that certifies, and the project-wide policy: [IPR.md](https://github.com/npstorey/civic-ai-tools/blob/main/IPR.md) (hub repo; adopted per [ADR-0017](https://github.com/npstorey/civic-ai-tools/blob/main/docs/adr/0017-ipr-posture-dco-rf-statement.md)).
-- The project's patent posture is the royalty-free statement at [PATENTS.md](https://github.com/npstorey/civic-ai-tools/blob/main/PATENTS.md).
+This repository follows the project-wide contribution policy in the
+[hub CONTRIBUTING guide](https://github.com/npstorey/civic-ai-tools/blob/main/CONTRIBUTING.md#commits-signing-and-how-we-merge), which is the canonical
+text. In short:
+
+- **Sign off every commit — required.** `git commit -s` appends a `Signed-off-by:` line (DCO 1.1;
+  what it certifies is in [IPR.md](https://github.com/npstorey/civic-ai-tools/blob/main/IPR.md), adopted per
+  [ADR-0017](https://github.com/npstorey/civic-ai-tools/blob/main/docs/adr/0017-ipr-posture-dco-rf-statement.md)). A required `DCO` status check
+  enforces it. Forgot? `git rebase --signoff main` fixes a whole branch at once.
+- **Sign your commits — encouraged, not required.** SSH or GPG, with the public key registered on your
+  GitHub account. Not enforced on any branch
+  ([Q74](https://github.com/npstorey/civic-ai-tools/blob/main/docs/architecture/open-questions.md#q74--should-the-default-branches-require-signed-commits)
+  records why), but because we never rewrite your commits, your signature is what stays on `main`.
+- **Rebase into atomic commits before requesting review.** Each commit should build and pass tests on
+  its own. We do not squash at merge time, so your branch lands exactly as you shaped it — and that is
+  what keeps `git bisect` useful.
+- **We merge with merge commits — never squash, never rebase.** Squash and rebase merges rewrite
+  commits, so what lands on `main` is a new object: your signature is replaced by GitHub's and your
+  per-commit sign-offs collapse into one commit body. A merge commit is the only method that leaves
+  your commits on `main` as the objects you actually made and signed. Reasoning and costs:
+  [ADR-0027](https://github.com/npstorey/civic-ai-tools/blob/main/docs/adr/0027-merge-commit-only-vcs-policy.md). To read `main` as one entry per
+  pull request, use `git log --first-parent`.
+
+The project's patent posture is the royalty-free statement at [PATENTS.md](https://github.com/npstorey/civic-ai-tools/blob/main/PATENTS.md).
 
 ## License
 
