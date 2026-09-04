@@ -8,6 +8,8 @@ import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import crypto from 'crypto';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   UNIFIED_SOCRATA_TOOL,
   SEARCH_TOOL,
@@ -40,7 +42,16 @@ import { composeSkillGuidance } from './skills/compose.js';
 
 dotenv.config();
 
-async function createServer(transport?: OpenAICompatibleTransport): Promise<Server> {
+/**
+ * Builds a Server with every tool/prompt/resource handler registered.
+ *
+ * Exported so a test can drive the real handlers over an in-memory transport
+ * rather than rebuilding a look-alike server of its own. Before this export
+ * existed, every "integration" test in `src/__tests__` constructed its own
+ * `McpServer` with its own titles and descriptions, so nothing in the suite
+ * ever read what this file actually returns.
+ */
+export async function createServer(transport?: OpenAICompatibleTransport): Promise<Server> {
   console.error('[Server] Creating Server instance...');
   
   const server = new Server(
@@ -1230,22 +1241,45 @@ async function startApp() {
   }
 }
 
-// Check for --stdio flag to determine transport mode
-if (process.argv.includes('--stdio')) {
-  // Stdio mode for Claude Code / Cursor
-  (async () => {
-    try {
-      console.error('[Startup] Starting in stdio mode...');
-      const transport = new StdioServerTransport();
-      const server = await createServer();
-      await server.connect(transport);
-      console.error('[Startup] Server connected to stdio transport');
-    } catch (error) {
-      console.error('[Fatal] Error starting stdio server:', error);
-      process.exit(1);
-    }
-  })();
-} else {
-  // HTTP mode for hosted deployments (the reference deployment runs on Render)
-  startApp().catch(console.error);
+/**
+ * True unless this module is being imported by some other entry point.
+ *
+ * `createServer` is exported for tests, and importing this module used to boot
+ * a transport as a side effect. The check is deliberately biased towards
+ * starting: it returns true whenever the answer cannot be established (no
+ * `argv[1]`, an unresolvable path), so `npm run start`, the `--stdio` bin entry
+ * and the Render start command keep the behaviour they had. `realpathSync` on
+ * both sides is what makes the npx/`node_modules/.bin` symlink resolve to the
+ * same file as `import.meta.url`.
+ */
+function isProcessEntrypoint(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return true;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return true;
+  }
+}
+
+if (isProcessEntrypoint()) {
+  // Check for --stdio flag to determine transport mode
+  if (process.argv.includes('--stdio')) {
+    // Stdio mode for Claude Code / Cursor
+    (async () => {
+      try {
+        console.error('[Startup] Starting in stdio mode...');
+        const transport = new StdioServerTransport();
+        const server = await createServer();
+        await server.connect(transport);
+        console.error('[Startup] Server connected to stdio transport');
+      } catch (error) {
+        console.error('[Fatal] Error starting stdio server:', error);
+        process.exit(1);
+      }
+    })();
+  } else {
+    // HTTP mode for hosted deployments (the reference deployment runs on Render)
+    startApp().catch(console.error);
+  }
 }
