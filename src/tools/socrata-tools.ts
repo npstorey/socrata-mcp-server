@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { type JsonSchema7Type } from 'zod-to-json-schema'; // Keep for typing if manually constructing
 import { Tool } from '@modelcontextprotocol/sdk/types.js'; // Suffix needed
 import { McpError, ErrorCode } from '../utils/mcp-errors.js';
+import { getDefaultDomain } from '../utils/portal-config.js';
 import {
   fetchFromSocrataApi,
   DatasetMetadata,
@@ -25,11 +26,9 @@ export type ToolWithHandler = Tool & {
   handler: (params: Record<string, unknown>) => Promise<unknown>;
 };
 
-// Get the default domain from environment
-const getDefaultDomain = () => {
-  const url = process.env.DATA_PORTAL_URL || 'https://data.cityofnewyork.us';
-  return url.replace(/^https?:\/\//, '');
-};
+// The configured portal's host. One implementation, in ../utils/portal-config.js,
+// so src/index.ts resolves the same value instead of naming a portal in literal
+// text (server#61).
 
 // Handler for catalog functionality
 async function handleCatalog(params: {
@@ -323,7 +322,10 @@ export const socrataToolZodSchema = z.object({
   query: z.string().min(1).optional()
          .describe('General search phrase OR a full SoQL query string. If this is a full SoQL query (e.g., starts with SELECT), other SoQL parameters like select, where, q might be overridden or ignored by the handler in favor of the full SoQL query. If it\'s a search phrase, it will likely be used for a full-text search ($q parameter to Socrata).'),
   // Optional parameters - these should also be in jsonParameters if they are to be exposed to the client
-  domain: z.string().optional().describe('The Socrata domain (e.g., data.cityofnewyork.us)'),
+  // No portal example here: this schema is used only to parse incoming
+  // arguments, never advertised, so it must not carry a domain snapshotted at
+  // module-load time. The advertised copy is jsonParameters.properties.domain.
+  domain: z.string().optional().describe('The Socrata domain to query; defaults to the portal this server is configured for'),
   portal: z.string().optional().describe('Alias for domain — the Socrata portal domain'),
   limit: z.union([z.coerce.number().int().positive(), z.literal('all')]).optional().describe('Number of results to return, or "all" to fetch all available data up to configured cap'),
   offset: z.number().int().nonnegative().optional().describe('Offset for pagination'),
@@ -358,7 +360,12 @@ const jsonParameters: any = {
     // Optional parameters reflected from socrataToolZodSchema
     domain: {
       type: 'string',
-      description: 'The Socrata domain (e.g., data.cityofnewyork.us)'
+      // A getter for the same reason SEARCH_TOOL's description is one: this
+      // object is serialized into tools/list on every request, and the example
+      // has to be the portal this server is actually configured for.
+      get description() {
+        return `The Socrata domain to query; defaults to the portal this server is configured for (${getDefaultDomain()})`;
+      }
     },
     portal: {
       type: 'string',
@@ -439,11 +446,19 @@ export const UNIFIED_SOCRATA_TOOL: ToolWithHandler = {
   handler: handleSocrataTool as (params: Record<string, unknown>) => Promise<unknown>
 };
 
-// New search tool that returns only id/score pairs
+// New search tool that returns only id/score pairs.
+// `title` and `description` are getters, not literals: the handler behind them
+// resolves the portal from DATA_PORTAL_URL at call time, so the text a model
+// reads has to resolve it at read time too. A literal built at module load
+// would also read the environment before src/index.ts runs dotenv.config().
 export const SEARCH_TOOL: ToolWithHandler = {
   name: 'search',
-  title: 'Search NYC Open Data',
-  description: 'Search NYC Open Data portal and return matching dataset IDs',
+  get title() {
+    return `Search ${getDefaultDomain()}`;
+  },
+  get description() {
+    return `Search the open data portal this server is configured for (${getDefaultDomain()}) and return matching dataset IDs`;
+  },
   inputSchema: searchJsonParameters,  // Latest MCP spec uses 'inputSchema'
   handler: handleSearchTool as (params: Record<string, unknown>) => Promise<unknown>
 };
@@ -451,8 +466,12 @@ export const SEARCH_TOOL: ToolWithHandler = {
 // New document retrieval tool
 export const FETCH_TOOL: ToolWithHandler = {
   name: 'fetch',
-  title: 'Fetch NYC Data Document',
-  description: 'Retrieve full dataset metadata or record content from NYC Open Data portal',
+  get title() {
+    return `Fetch Document from ${getDefaultDomain()}`;
+  },
+  get description() {
+    return `Retrieve full dataset metadata or record content from the open data portal this server is configured for (${getDefaultDomain()})`;
+  },
   inputSchema: fetchJsonParameters,
   handler: handleFetchTool as (params: Record<string, unknown>) => Promise<unknown>
 };
