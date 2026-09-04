@@ -33,6 +33,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { McpError, ErrorCode } from './utils/mcp-errors.js';
 import { composeSkillGuidance } from './skills/compose.js';
+import { getDefaultDomain } from './utils/portal-config.js';
 
 // NOTE(#47): the prompts/resources request schemas were previously hand-rolled
 // here behind a comment claiming they were "not properly exported from SDK".
@@ -41,6 +42,34 @@ import { composeSkillGuidance } from './skills/compose.js';
 // removed. Import the SDK's own schemas instead.
 
 dotenv.config();
+
+/**
+ * Advertised identifiers that used to name one city.
+ *
+ * These are the names and URIs a client addresses, not prose, so they are
+ * versioned rather than interpolated: a URI that changed with `DATA_PORTAL_URL`
+ * would not be an identifier at all. The pre-rename forms are still accepted so
+ * a client that hardcoded one keeps working; they are simply never advertised.
+ * Measured before renaming: nothing in this repository, the hub repository or
+ * the website addresses them — the only consumers were this file.
+ */
+const RESOURCE_URIS = {
+  portalOverview: 'data://portal/info/portal-overview',
+  popularDatasets: 'data://portal/info/popular-datasets',
+  apiGuide: 'data://portal/info/api-guide'
+} as const;
+
+const LEGACY_RESOURCE_URI_PREFIX = 'data://nyc/info/';
+
+/** Maps a pre-rename resource URI onto its current one; passes anything else through. */
+function resolveResourceUri(uri: string): string {
+  return uri.startsWith(LEGACY_RESOURCE_URI_PREFIX)
+    ? `data://portal/info/${uri.slice(LEGACY_RESOURCE_URI_PREFIX.length)}`
+    : uri;
+}
+
+const ANALYZE_PROMPT = 'analyze_open_data';
+const ANALYZE_PROMPT_LEGACY_NAME = 'analyze_nyc_data';
 
 /**
  * Builds a Server with every tool/prompt/resource handler registered.
@@ -190,13 +219,16 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
       },
       {
         name: 'search',
-        title: 'Search NYC Open Data',
+        // Read the title from the tool definition rather than re-declaring it.
+        // Two literals here named a portal this server may not be serving, and
+        // they could drift from socrata-tools.ts without anything noticing.
+        title: SEARCH_TOOL.title,
         description: SEARCH_TOOL.description,
         inputSchema: SEARCH_TOOL.inputSchema
       },
       {
         name: 'fetch',
-        title: 'Fetch NYC Data Document',
+        title: FETCH_TOOL.title,
         description: FETCH_TOOL.description,
         inputSchema: FETCH_TOOL.inputSchema
       }
@@ -211,11 +243,13 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
   server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
     console.error('[Server - ListPrompts] Request received');
     
+    const portalDomain = getDefaultDomain();
+
     const prompts = [
       {
-        name: 'analyze_nyc_data',
-        title: 'Analyze NYC Open Data',
-        description: 'Search and analyze datasets from NYC Open Data portal',
+        name: ANALYZE_PROMPT,
+        title: 'Analyze Open Data',
+        description: `Search and analyze datasets from the open data portal this server is configured for (${portalDomain})`,
         arguments: [
           {
             name: 'topic',
@@ -231,8 +265,8 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
       },
       {
         name: 'find_dataset',
-        title: 'Find NYC Dataset',
-        description: 'Help find specific datasets in the NYC Open Data portal',
+        title: 'Find a Dataset',
+        description: `Help find specific datasets on the open data portal this server is configured for (${portalDomain})`,
         arguments: [
           {
             name: 'description',
@@ -243,8 +277,8 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
       },
       {
         name: 'compare_neighborhoods',
-        title: 'Compare NYC Neighborhoods',
-        description: 'Compare data across different NYC neighborhoods or boroughs',
+        title: 'Compare Neighborhoods',
+        description: `Compare data across neighborhoods or districts on the open data portal this server is configured for (${portalDomain})`,
         arguments: [
           {
             name: 'metric',
@@ -253,7 +287,9 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
           },
           {
             name: 'neighborhoods',
-            description: 'Which neighborhoods or boroughs to compare (comma-separated)',
+            // "boroughs" is one city's subdivision vocabulary; whatever this
+            // portal calls its areas is the caller's to supply.
+            description: 'Which neighborhoods or districts to compare (comma-separated)',
             required: true
           }
         ]
@@ -308,17 +344,18 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
       };
     }
 
-    if (promptName === 'analyze_nyc_data') {
-      const topic = args?.topic || 'general NYC data';
+    if (promptName === ANALYZE_PROMPT || promptName === ANALYZE_PROMPT_LEGACY_NAME) {
+      const portalDomain = getDefaultDomain();
+      const topic = args?.topic || 'general open data';
       const timePeriod = args?.time_period ? ` for ${args.time_period}` : '';
       return {
-        description: `Analyze ${topic} from NYC Open Data`,
+        description: `Analyze ${topic} from ${portalDomain}`,
         messages: [
           {
             role: 'user' as const,
             content: {
               type: 'text' as const,
-              text: `Search and analyze datasets about "${topic}"${timePeriod} from the NYC Open Data portal (data.cityofnewyork.us). Use the get_data tool to discover relevant datasets and run SoQL queries. Provide key findings with data tables and methodology.`
+              text: `Search and analyze datasets about "${topic}"${timePeriod} on the open data portal this server is configured for (${portalDomain}). Use the get_data tool to discover relevant datasets and run SoQL queries. Provide key findings with data tables and methodology.`
             }
           }
         ]
@@ -326,15 +363,16 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
     }
 
     if (promptName === 'find_dataset') {
+      const portalDomain = getDefaultDomain();
       const description = args?.description || 'data';
       return {
-        description: `Find NYC datasets matching: ${description}`,
+        description: `Find datasets on ${portalDomain} matching: ${description}`,
         messages: [
           {
             role: 'user' as const,
             content: {
               type: 'text' as const,
-              text: `Help me find datasets on the NYC Open Data portal (data.cityofnewyork.us) that match this description: "${description}". Use the search tool to find relevant datasets and provide their names, IDs, and descriptions.`
+              text: `Help me find datasets on the open data portal this server is configured for (${portalDomain}) that match this description: "${description}". Use the search tool to find relevant datasets and provide their names, IDs, and descriptions.`
             }
           }
         ]
@@ -342,8 +380,9 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
     }
 
     if (promptName === 'compare_neighborhoods') {
+      const portalDomain = getDefaultDomain();
       const metric = args?.metric || 'data';
-      const neighborhoods = args?.neighborhoods || 'all boroughs';
+      const neighborhoods = args?.neighborhoods || 'all areas the portal reports on';
       return {
         description: `Compare ${metric} across ${neighborhoods}`,
         messages: [
@@ -351,7 +390,7 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
             role: 'user' as const,
             content: {
               type: 'text' as const,
-              text: `Compare ${metric} across these NYC neighborhoods/boroughs: ${neighborhoods}. Use the NYC Open Data portal to find relevant datasets and run comparative queries. Present findings in a comparison table.`
+              text: `Compare ${metric} across these neighborhoods or districts: ${neighborhoods}. Use the open data portal this server is configured for (${portalDomain}) to find relevant datasets and run comparative queries. Present findings in a comparison table.`
             }
           }
         ]
@@ -365,26 +404,31 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
   server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     console.error('[Server - ListResources] Request received');
     
+    const portalDomain = getDefaultDomain();
+
     const resources = [
       {
-        uri: 'data://nyc/info/portal-overview',
-        name: 'NYC Open Data Portal Overview',
-        title: 'NYC Open Data Portal Information',
-        description: 'Basic information about NYC Open Data portal and available datasets',
+        uri: RESOURCE_URIS.portalOverview,
+        name: 'Open Data Portal Overview',
+        title: `${portalDomain} Portal Overview`,
+        description: `What the portal this server is configured for (${portalDomain}) offers, and how to explore it from here`,
         mimeType: 'text/plain'
       },
       {
-        uri: 'data://nyc/info/popular-datasets',
-        name: 'Popular NYC Datasets',
-        title: 'Most Popular NYC Open Data Datasets',
-        description: 'List of the most frequently accessed datasets on NYC Open Data',
-        mimeType: 'application/json'
+        uri: RESOURCE_URIS.popularDatasets,
+        name: 'Finding Popular Datasets',
+        title: `How to Find Popular Datasets on ${portalDomain}`,
+        // Was a hardcoded list of five datasets from one city, which is false on
+        // any other portal and goes stale on that one. What is actually popular
+        // is a property of the portal, so this resource says how to ask it.
+        description: `How to find the most-used datasets on the portal this server is configured for (${portalDomain})`,
+        mimeType: 'text/markdown'
       },
       {
-        uri: 'data://nyc/info/api-guide',
+        uri: RESOURCE_URIS.apiGuide,
         name: 'Socrata API Guide',
         title: 'Quick Guide to Socrata API',
-        description: 'Quick reference for using Socrata API with NYC Open Data',
+        description: `Quick reference for using the Socrata API against ${portalDomain}`,
         mimeType: 'text/markdown'
       }
     ];
@@ -401,85 +445,79 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     console.error('[Server - ReadResource] Request received for URI:', request.params.uri);
     
+    const portalDomain = getDefaultDomain();
+
     const resourceContents: Record<string, any> = {
-      'data://nyc/info/portal-overview': {
-        uri: 'data://nyc/info/portal-overview',
-        name: 'NYC Open Data Portal Overview',
+      [RESOURCE_URIS.portalOverview]: {
+        uri: RESOURCE_URIS.portalOverview,
+        name: 'Open Data Portal Overview',
         mimeType: 'text/plain',
-        text: `NYC Open Data Portal Overview
+        // The dataset count, the publishing agencies and the category list this
+        // text used to assert were one city's, stated as fact. What a portal
+        // holds is the portal's property; ask it rather than assert it.
+        text: `Open Data Portal Overview
 
-The NYC Open Data portal (data.cityofnewyork.us) provides access to thousands of datasets from New York City agencies.
+This server is configured for the Socrata open data portal at ${portalDomain}.
+Any tool call that does not pass an explicit "domain" argument runs against
+that portal.
 
-Key Information:
-- Over 3,000+ datasets available
-- Updated regularly by city agencies
-- Free to access and use
-- Powered by Socrata platform
-- Supports various data formats (CSV, JSON, GeoJSON, etc.)
+What a Socrata portal provides:
+- A catalog of datasets published by the organizations behind the portal
+- Dataset metadata (columns, types, update cadence) alongside the records
+- Free, key-less read access over the Socrata API
+- Several response formats on the underlying API (JSON, CSV, GeoJSON)
 
-Common Dataset Categories:
-- Public Safety (crime data, fire incidents, etc.)
-- Transportation (traffic, parking, transit)
-- Health (restaurant inspections, health statistics)
-- Housing & Development (building permits, violations)
-- Environment (air quality, tree census)
-- Education (school performance, enrollment)
-- Finance (budget, spending)
+How to explore it from here:
+- search — full-text search over the catalog; returns dataset IDs
+- fetch — retrieve a dataset's metadata, or a record, by identifier
+- get_data with type "catalog" — browse or filter the catalog
+- get_data with type "metadata" — inspect one dataset's columns
+- get_data with type "query" — run a SoQL query against a dataset
+- get_data with type "metrics" — usage metrics for a dataset
 
-Access Methods:
-- Web interface for browsing and filtering
-- Socrata API for programmatic access
-- Direct download in multiple formats
-- Real-time data feeds for some datasets`
+Which datasets exist on ${portalDomain}, how many there are, and which
+organizations publish them are properties of that portal. Ask it with search or
+the catalog rather than assuming a list.`
       },
-      'data://nyc/info/popular-datasets': {
-        uri: 'data://nyc/info/popular-datasets',
-        name: 'Popular NYC Datasets',
-        mimeType: 'application/json',
-        text: JSON.stringify({
-          popular_datasets: [
-            {
-              name: "311 Service Requests",
-              id: "erm2-nwe9",
-              description: "All 311 Service Requests from 2010 to present",
-              category: "Public Services"
-            },
-            {
-              name: "NYC Restaurant Inspection Results",
-              id: "43nn-pn8j",
-              description: "Restaurant inspection results including letter grades",
-              category: "Health"
-            },
-            {
-              name: "Motor Vehicle Collisions - Crashes",
-              id: "h9gi-nx95",
-              description: "Motor vehicle collision data from NYPD",
-              category: "Public Safety"
-            },
-            {
-              name: "DOB Job Application Filings",
-              id: "ic3t-wcy2",
-              description: "Building permit applications filed with DOB",
-              category: "Housing & Development"
-            },
-            {
-              name: "NYPD Complaint Data Current (Year To Date)",
-              id: "5uac-w243",
-              description: "NYPD complaint data for current year",
-              category: "Public Safety"
-            }
-          ]
-        }, null, 2)
+      [RESOURCE_URIS.popularDatasets]: {
+        uri: RESOURCE_URIS.popularDatasets,
+        name: 'Finding Popular Datasets',
+        mimeType: 'text/markdown',
+        // This was a hardcoded snapshot of five datasets from one city, served
+        // as application/json under a title naming that city's portal. It could
+        // not be made true for another portal by interpolating a domain: the
+        // dataset IDs, the names and the publishing agencies were all one
+        // portal's. Deriving the list live from the catalog would put a network
+        // call inside resources/read and a new failure mode with it, so the
+        // resource now answers the same question by pointing at the tools that
+        // can actually answer it. Making it live is a follow-up, not a text fix.
+        text: `# Finding the most-used datasets on ${portalDomain}
+
+This server ships no curated list of popular datasets. Which datasets are most
+used is a property of ${portalDomain} and it changes over time, so a list baked
+into the server would go stale here and would be wrong on any other portal.
+
+Ask the portal instead:
+
+- \`get_data\` with \`type: "catalog"\` and a \`query\` returns catalog entries
+  matching a search phrase, most relevant first.
+- \`get_data\` with \`type: "metrics"\` and a \`dataset_id\` returns that
+  dataset's usage metrics.
+- \`search\` returns dataset IDs for a full-text query; \`fetch\` retrieves one
+  by identifier.
+
+A reasonable sequence: \`search\` for the topic, then \`get_data\` with
+\`type: "metrics"\` on the candidates to compare how heavily each is used.`
       },
-      'data://nyc/info/api-guide': {
-        uri: 'data://nyc/info/api-guide',
+      [RESOURCE_URIS.apiGuide]: {
+        uri: RESOURCE_URIS.apiGuide,
         name: 'Socrata API Guide',
         mimeType: 'text/markdown',
         text: `# Socrata API Quick Guide
 
 ## Basic API Structure
 \`\`\`
-https://data.cityofnewyork.us/resource/{dataset-id}.{format}
+https://${portalDomain}/resource/{dataset-id}.{format}
 \`\`\`
 
 ## Common Parameters
@@ -499,7 +537,7 @@ https://data.cityofnewyork.us/resource/{dataset-id}.{format}
 
 ### Filter with WHERE clause
 \`\`\`
-/resource/dataset-id.json?$where=borough='MANHATTAN' AND year=2023
+/resource/dataset-id.json?$where=status='Open' AND year=2023
 \`\`\`
 
 ### Full-text search
@@ -525,11 +563,11 @@ https://data.cityofnewyork.us/resource/{dataset-id}.{format}
       }
     };
     
-    const content = resourceContents[request.params.uri];
+    const content = resourceContents[resolveResourceUri(request.params.uri)];
     if (!content) {
       throw new Error(`Resource not found: ${request.params.uri}`);
     }
-    
+
     console.error('[Server - ReadResource] Returning content for:', request.params.uri);
     
     return {

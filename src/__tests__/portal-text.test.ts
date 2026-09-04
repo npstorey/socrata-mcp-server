@@ -258,4 +258,40 @@ describe('advertised text describes the configured portal', () => {
       });
     });
   }
+
+  describe('the pre-rename identifiers still resolve', () => {
+    // The prompt name and the resource URIs that named a city were renamed, not
+    // interpolated — an identifier that moved with DATA_PORTAL_URL would not be
+    // an identifier. The old forms are accepted so a client that hardcoded one
+    // keeps working. Without these three assertions that compatibility path is
+    // code nothing drives.
+    beforeAll(() => {
+      process.env.DATA_PORTAL_URL = PORTALS[0].url;
+    });
+
+    it('serves the pre-rename analyze prompt name', async () => {
+      const got = await client.getPrompt({ name: 'analyze_nyc_data', arguments: { topic: 'noise' } });
+      expect(got.messages[0].content.type).toBe('text');
+      expect(String(got.messages[0].content.text)).toContain(PORTALS[0].domain);
+    });
+
+    it('serves the pre-rename resource URIs', async () => {
+      for (const suffix of ['portal-overview', 'popular-datasets', 'api-guide']) {
+        const got = await client.readResource({ uri: `data://nyc/info/${suffix}` });
+        expect(got.contents).toHaveLength(1);
+        // The response carries the current URI, so nothing this server sends
+        // spells the old one back at the client.
+        expect(got.contents[0].uri).toBe(`data://portal/info/${suffix}`);
+      }
+    });
+
+    it('advertises only the current identifiers', async () => {
+      const prompts = await client.listPrompts();
+      expect(prompts.prompts.map((p) => p.name)).not.toContain('analyze_nyc_data');
+      const resources = await client.listResources();
+      for (const resource of resources.resources) {
+        expect(resource.uri.startsWith('data://portal/info/')).toBe(true);
+      }
+    });
+  });
 });
