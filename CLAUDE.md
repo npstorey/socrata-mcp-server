@@ -50,8 +50,15 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
 
 ## Environment
 
-- `DATA_PORTAL_URL` — **required**; any Socrata portal, e.g.
-  `https://data.cityofnewyork.us`. `src/utils/portal-info.ts` throws when it is unset.
+- `DATA_PORTAL_URL` — **optional**; any Socrata portal, e.g. `https://data.cityofnewyork.us`.
+  **Set**, it is the default portal for a tool call that names none. **Unset**, there is no
+  default: a call that names no portal (`get_data` without `domain`, `fetch` by a bare dataset
+  id, any `search`) is refused per call as a JSON-RPC `-32602` error — never a result carrying
+  `isError: true` — and the advertised tool, prompt and resource text states that no default
+  portal is configured. Resolved per call by `src/utils/portal-config.ts`. No code default names
+  a portal; `src/__tests__/portal-default-guard.test.ts` fails on a portal host in source or a
+  load-time read of the variable. An instance of the website that fronts a single portal sets
+  this and the app's `SITE_DEFAULT_PORTAL` to the same portal.
 - `PORT` — HTTP transport port. Default **8000** in code (`src/index.ts`); the Render
   deployment supplies its own.
 - `SKILL_POSTURE` — optional; deployment posture overlay. Semantics in
