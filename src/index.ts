@@ -33,7 +33,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { McpError, ErrorCode } from './utils/mcp-errors.js';
 import { composeSkillGuidance } from './skills/compose.js';
-import { getDefaultDomain } from './utils/portal-config.js';
+import { getDefaultDomain, describeConfiguredPortal, NO_DEFAULT_PORTAL } from './utils/portal-config.js';
 
 // NOTE(#47): the prompts/resources request schemas were previously hand-rolled
 // here behind a comment claiming they were "not properly exported from SDK".
@@ -70,6 +70,15 @@ function resolveResourceUri(uri: string): string {
 
 const ANALYZE_PROMPT = 'analyze_open_data';
 const ANALYZE_PROMPT_LEGACY_NAME = 'analyze_nyc_data';
+
+/**
+ * Appended to a prompt body when this server has no default portal (server#63): the model has
+ * to name the portal on every call, or the call is refused. Empty when a default is configured,
+ * so the configured-state text is unchanged.
+ */
+function namePortalInstruction(portalDomain: string | undefined): string {
+  return portalDomain ? '' : ' Pass the portal\'s host as "domain" on every get_data call.';
+}
 
 /**
  * Builds a Server with every tool/prompt/resource handler registered.
@@ -243,13 +252,13 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
   server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
     console.error('[Server - ListPrompts] Request received');
     
-    const portalDomain = getDefaultDomain();
+    const portal = describeConfiguredPortal();
 
     const prompts = [
       {
         name: ANALYZE_PROMPT,
         title: 'Analyze Open Data',
-        description: `Search and analyze datasets from the open data portal this server is configured for (${portalDomain})`,
+        description: `Search and analyze datasets from ${portal}`,
         arguments: [
           {
             name: 'topic',
@@ -266,7 +275,7 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
       {
         name: 'find_dataset',
         title: 'Find a Dataset',
-        description: `Help find specific datasets on the open data portal this server is configured for (${portalDomain})`,
+        description: `Help find specific datasets on ${portal}`,
         arguments: [
           {
             name: 'description',
@@ -278,7 +287,7 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
       {
         name: 'compare_neighborhoods',
         title: 'Compare Neighborhoods',
-        description: `Compare data across neighborhoods or districts on the open data portal this server is configured for (${portalDomain})`,
+        description: `Compare data across neighborhoods or districts on ${portal}`,
         arguments: [
           {
             name: 'metric',
@@ -346,16 +355,17 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
 
     if (promptName === ANALYZE_PROMPT || promptName === ANALYZE_PROMPT_LEGACY_NAME) {
       const portalDomain = getDefaultDomain();
+      const portal = describeConfiguredPortal();
       const topic = args?.topic || 'general open data';
       const timePeriod = args?.time_period ? ` for ${args.time_period}` : '';
       return {
-        description: `Analyze ${topic} from ${portalDomain}`,
+        description: portalDomain ? `Analyze ${topic} from ${portalDomain}` : `Analyze ${topic} (${NO_DEFAULT_PORTAL})`,
         messages: [
           {
             role: 'user' as const,
             content: {
               type: 'text' as const,
-              text: `Search and analyze datasets about "${topic}"${timePeriod} on the open data portal this server is configured for (${portalDomain}). Use the get_data tool to discover relevant datasets and run SoQL queries. Provide key findings with data tables and methodology.`
+              text: `Search and analyze datasets about "${topic}"${timePeriod} on ${portal}. Use the get_data tool to discover relevant datasets and run SoQL queries.${namePortalInstruction(portalDomain)} Provide key findings with data tables and methodology.`
             }
           }
         ]
@@ -366,13 +376,19 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
       const portalDomain = getDefaultDomain();
       const description = args?.description || 'data';
       return {
-        description: `Find datasets on ${portalDomain} matching: ${description}`,
+        description: portalDomain
+          ? `Find datasets on ${portalDomain} matching: ${description}`
+          : `Find datasets matching: ${description} (${NO_DEFAULT_PORTAL})`,
         messages: [
           {
             role: 'user' as const,
             content: {
               type: 'text' as const,
-              text: `Help me find datasets on the open data portal this server is configured for (${portalDomain}) that match this description: "${description}". Use the search tool to find relevant datasets and provide their names, IDs, and descriptions.`
+              // With no default portal the search tool is refused (it takes no portal), so the
+              // body points at the tool that can name one.
+              text: portalDomain
+                ? `Help me find datasets on the open data portal this server is configured for (${portalDomain}) that match this description: "${description}". Use the search tool to find relevant datasets and provide their names, IDs, and descriptions.`
+                : `Help me find datasets that match this description: "${description}". This server has ${NO_DEFAULT_PORTAL}, so the search tool is refused: use get_data with type "catalog", a "query", and the host of the portal to look in as "domain", then provide the datasets' names, IDs, and descriptions.`
             }
           }
         ]
@@ -381,6 +397,7 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
 
     if (promptName === 'compare_neighborhoods') {
       const portalDomain = getDefaultDomain();
+      const portal = describeConfiguredPortal();
       const metric = args?.metric || 'data';
       const neighborhoods = args?.neighborhoods || 'all areas the portal reports on';
       return {
@@ -390,7 +407,7 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
             role: 'user' as const,
             content: {
               type: 'text' as const,
-              text: `Compare ${metric} across these neighborhoods or districts: ${neighborhoods}. Use the open data portal this server is configured for (${portalDomain}) to find relevant datasets and run comparative queries. Present findings in a comparison table.`
+              text: `Compare ${metric} across these neighborhoods or districts: ${neighborhoods}. Use ${portal} to find relevant datasets and run comparative queries.${namePortalInstruction(portalDomain)} Present findings in a comparison table.`
             }
           }
         ]
@@ -410,25 +427,31 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
       {
         uri: RESOURCE_URIS.portalOverview,
         name: 'Open Data Portal Overview',
-        title: `${portalDomain} Portal Overview`,
-        description: `What the portal this server is configured for (${portalDomain}) offers, and how to explore it from here`,
+        title: portalDomain ? `${portalDomain} Portal Overview` : `Portal Overview (${NO_DEFAULT_PORTAL})`,
+        description: portalDomain
+          ? `What the portal this server is configured for (${portalDomain}) offers, and how to explore it from here`
+          : `What a Socrata open data portal offers, and how to explore one from here (this server has ${NO_DEFAULT_PORTAL})`,
         mimeType: 'text/plain'
       },
       {
         uri: RESOURCE_URIS.popularDatasets,
         name: 'Finding Popular Datasets',
-        title: `How to Find Popular Datasets on ${portalDomain}`,
+        title: portalDomain ? `How to Find Popular Datasets on ${portalDomain}` : 'How to Find Popular Datasets on a Socrata Portal',
         // Was a hardcoded list of five datasets from one city, which is false on
         // any other portal and goes stale on that one. What is actually popular
         // is a property of the portal, so this resource says how to ask it.
-        description: `How to find the most-used datasets on the portal this server is configured for (${portalDomain})`,
+        description: portalDomain
+          ? `How to find the most-used datasets on the portal this server is configured for (${portalDomain})`
+          : `How to find the most-used datasets on a portal you name (this server has ${NO_DEFAULT_PORTAL})`,
         mimeType: 'text/markdown'
       },
       {
         uri: RESOURCE_URIS.apiGuide,
         name: 'Socrata API Guide',
         title: 'Quick Guide to Socrata API',
-        description: `Quick reference for using the Socrata API against ${portalDomain}`,
+        description: portalDomain
+          ? `Quick reference for using the Socrata API against ${portalDomain}`
+          : `Quick reference for using the Socrata API against a portal you name (this server has ${NO_DEFAULT_PORTAL})`,
         mimeType: 'text/markdown'
       }
     ];
@@ -447,6 +470,62 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
     
     const portalDomain = getDefaultDomain();
 
+    // With no default portal (server#63) each resource says so and names no portal; with one,
+    // the text below is unchanged.
+    const noDefaultOverview = `Open Data Portal Overview
+
+This server has ${NO_DEFAULT_PORTAL}. It does not choose a portal on a
+caller's behalf: every tool call names the portal it is about, and a call
+that names none is refused.
+
+What a Socrata portal provides:
+- A catalog of datasets published by the organizations behind the portal
+- Dataset metadata (columns, types, update cadence) alongside the records
+- Free, key-less read access over the Socrata API
+- Several response formats on the underlying API (JSON, CSV, GeoJSON)
+
+How to explore a portal from here:
+- get_data with type "catalog" — browse or filter a portal's catalog
+- get_data with type "metadata" — inspect one dataset's columns
+- get_data with type "query" — run a SoQL query against a dataset
+- get_data with type "metrics" — usage metrics for a dataset
+  Every get_data call passes the portal's host as "domain".
+- fetch — retrieve a dataset's metadata, or a record, by an identifier that
+  names its portal, e.g. dataset:<portal-host>:<dataset-id>
+- search — runs only against a default portal, so it is refused here
+
+Which datasets exist on a portal, how many there are, and which organizations
+publish them are properties of that portal. Ask it with the catalog rather
+than assuming a list.`;
+
+    const noDefaultPopular = `# Finding the most-used datasets on a Socrata portal
+
+This server ships no curated list of popular datasets. Which datasets are most
+used is a property of each portal and it changes over time, so a list baked
+into the server would go stale and would be wrong on any other portal.
+
+This server has ${NO_DEFAULT_PORTAL}, so every call below names its portal:
+pass the portal's host as \`domain\`.
+
+Ask the portal instead:
+
+- \`get_data\` with \`type: "catalog"\`, a \`query\` and a \`domain\` returns
+  catalog entries matching a search phrase, most relevant first.
+- \`get_data\` with \`type: "metrics"\`, a \`dataset_id\` and a \`domain\` returns
+  that dataset's usage metrics.
+- \`fetch\` retrieves one dataset by an identifier that names its portal
+  (\`dataset:<portal-host>:<dataset-id>\`). \`search\` takes no portal, so it is
+  refused without a default one.
+
+A reasonable sequence: \`get_data\` with \`type: "catalog"\` for the topic, then
+\`get_data\` with \`type: "metrics"\` on the candidates to compare how heavily
+each is used.`;
+
+    const apiHost = portalDomain ?? '{portal-host}';
+    const apiGuideNote = portalDomain
+      ? ''
+      : `\nThis server has ${NO_DEFAULT_PORTAL}: use the host of the portal you are querying.\n`;
+
     const resourceContents: Record<string, any> = {
       [RESOURCE_URIS.portalOverview]: {
         uri: RESOURCE_URIS.portalOverview,
@@ -455,7 +534,7 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
         // The dataset count, the publishing agencies and the category list this
         // text used to assert were one city's, stated as fact. What a portal
         // holds is the portal's property; ask it rather than assert it.
-        text: `Open Data Portal Overview
+        text: !portalDomain ? noDefaultOverview : `Open Data Portal Overview
 
 This server is configured for the Socrata open data portal at ${portalDomain}.
 Any tool call that does not pass an explicit "domain" argument runs against
@@ -491,7 +570,7 @@ the catalog rather than assuming a list.`
         // call inside resources/read and a new failure mode with it, so the
         // resource now answers the same question by pointing at the tools that
         // can actually answer it. Making it live is a follow-up, not a text fix.
-        text: `# Finding the most-used datasets on ${portalDomain}
+        text: !portalDomain ? noDefaultPopular : `# Finding the most-used datasets on ${portalDomain}
 
 This server ships no curated list of popular datasets. Which datasets are most
 used is a property of ${portalDomain} and it changes over time, so a list baked
@@ -517,9 +596,9 @@ A reasonable sequence: \`search\` for the topic, then \`get_data\` with
 
 ## Basic API Structure
 \`\`\`
-https://${portalDomain}/resource/{dataset-id}.{format}
+https://${apiHost}/resource/{dataset-id}.{format}
 \`\`\`
-
+${apiGuideNote}
 ## Common Parameters
 - **$limit**: Number of results to return (default: 1000, max: 50000)
 - **$offset**: Number of results to skip for pagination
@@ -688,7 +767,12 @@ async function startApp() {
     const app = express();
     const port = Number(process.env.PORT) || 8000;
     
-    console.error('[Environment] DATA_PORTAL_URL:', process.env.DATA_PORTAL_URL);
+    console.error(
+      '[Environment] DATA_PORTAL_URL:',
+      getDefaultDomain()
+        ? process.env.DATA_PORTAL_URL
+        : `unset (${NO_DEFAULT_PORTAL}; a tool call that names no portal is refused)`
+    );
     
     // IMPORTANT: NO express.json() before /mcp route!
     

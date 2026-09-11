@@ -23,6 +23,11 @@
  * configured domain does reach the surface — proving the text adapts rather
  * than merely having been scrubbed of city names.
  *
+ * AND A THIRD STATE: NO PORTAL AT ALL (server#63). `DATA_PORTAL_URL` is optional; unset, the
+ * server has no default portal. It then names no portal anywhere and says, on every surface it
+ * sends, that no default portal is configured. Each configured run asserts the converse — it
+ * never claims to have none — so neither statement can be written unconditionally.
+ *
  * IT ALSO REQUIRES THE TEXT TO BE RESOLVED LAZILY. One server instance answers
  * under both configurations. That is not incidental: `src/index.ts` calls
  * `dotenv.config()` in its module body, which runs *after* every import it
@@ -84,6 +89,21 @@ const NON_PORTAL_HOSTS: string[] = [];
 
 /** A host-shaped token, restricted to TLDs an open-data portal actually uses. */
 const HOST_PATTERN = /\b(?:[a-z0-9-]+\.)+(?:us|org|gov|com|io|net|edu)\b/gi;
+
+/** A URL naming a host of any TLD — used where no host at all may appear. */
+const URL_WITH_HOST = /:\/\/(?:[a-z0-9-]+\.)+[a-z]{2,}/gi;
+
+/**
+ * What every surface says when there is no default portal. Written out here rather than
+ * imported from the server, so the expectation is not the constant under test.
+ */
+const NO_DEFAULT_PORTAL_WORDS = 'no default portal configured';
+
+/**
+ * Phrasings that assert a portal is configured. With none configured, no surface may use them,
+ * not even ahead of a sentence saying there is none: the earlier sentence is still false.
+ */
+const CLAIMS_A_CONFIGURED_PORTAL = ['configured for', 'defaults to the portal'];
 
 /** Every string value reachable in a response, tagged with where it came from. */
 function collectStrings(value: unknown, path: string, out: Array<{ path: string; text: string }>): void {
@@ -256,8 +276,96 @@ describe('advertised text describes the configured portal', () => {
         // repository's skill documents, which name several cities on purpose.
         expect(skillGuidance).toBeTruthy();
       });
+
+      it('never claims to have no default portal', () => {
+        const claims: string[] = [];
+        for (const surface of surfaces) {
+          const strings: Array<{ path: string; text: string }> = [];
+          collectStrings(surface.response, surface.label, strings);
+          for (const { path, text } of strings) {
+            if (text.toLowerCase().includes(NO_DEFAULT_PORTAL_WORDS)) claims.push(path);
+          }
+        }
+        expect(claims, `configured for ${portal.domain}, but claims none in:\n${claims.join('\n')}`).toEqual([]);
+      });
     });
   }
+
+  describe('configured for no portal (DATA_PORTAL_URL unset)', () => {
+    let surfaces: Surface[];
+    let skillGuidance: unknown;
+
+    beforeAll(async () => {
+      delete process.env.DATA_PORTAL_URL;
+      ({ surfaces, skillGuidance } = await readAdvertisedSurfaces(client));
+    });
+
+    it('names no portal’s city anywhere in what it sends', () => {
+      const offences: string[] = [];
+      for (const surface of surfaces) {
+        const strings: Array<{ path: string; text: string }> = [];
+        collectStrings(surface.response, surface.label, strings);
+        for (const { path, text } of strings) {
+          for (const row of PORTALS) {
+            for (const word of row.vocabulary) {
+              if (text.toLowerCase().includes(word.toLowerCase())) {
+                offences.push(`${path}: "${word}" in ${JSON.stringify(text.slice(0, 160))}`);
+              }
+            }
+          }
+        }
+      }
+      expect(offences, `configured for no portal, but:\n${offences.join('\n')}`).toEqual([]);
+    });
+
+    it('spells no host at all, in prose or in a URL', () => {
+      const offences: string[] = [];
+      for (const surface of surfaces) {
+        const strings: Array<{ path: string; text: string }> = [];
+        collectStrings(surface.response, surface.label, strings);
+        for (const { path, text } of strings) {
+          const hosts = [...(text.match(HOST_PATTERN) ?? []), ...(text.match(URL_WITH_HOST) ?? [])];
+          for (const host of hosts) {
+            if (NON_PORTAL_HOSTS.includes(host.toLowerCase())) continue;
+            offences.push(`${path}: "${host}" in ${JSON.stringify(text.slice(0, 160))}`);
+          }
+        }
+      }
+      expect(offences, `configured for no portal, but:\n${offences.join('\n')}`).toEqual([]);
+    });
+
+    it('says that no default portal is configured on every surface it sends', () => {
+      const silent: string[] = [];
+      for (const surface of surfaces) {
+        const strings: Array<{ path: string; text: string }> = [];
+        collectStrings(surface.response, surface.label, strings);
+        if (!strings.some(({ text }) => text.toLowerCase().includes(NO_DEFAULT_PORTAL_WORDS))) {
+          silent.push(surface.label);
+        }
+      }
+      expect(silent, `no statement that there is no default portal in:\n${silent.join('\n')}`).toEqual([]);
+    });
+
+    it('claims a configured portal on no surface it sends', () => {
+      const claims: string[] = [];
+      for (const surface of surfaces) {
+        const strings: Array<{ path: string; text: string }> = [];
+        collectStrings(surface.response, surface.label, strings);
+        for (const { path, text } of strings) {
+          for (const phrase of CLAIMS_A_CONFIGURED_PORTAL) {
+            if (text.toLowerCase().includes(phrase)) {
+              claims.push(`${path}: "${phrase}" in ${JSON.stringify(text.slice(0, 160))}`);
+            }
+          }
+        }
+      }
+      expect(claims, `configured for no portal, but claims one:\n${claims.join('\n')}`).toEqual([]);
+    });
+
+    it('still serves the skill-guidance prompt (excluded from the assertions above)', () => {
+      expect(skillGuidance).toBeTruthy();
+    });
+  });
 
   describe('the pre-rename identifiers still resolve', () => {
     // The prompt name and the resource URIs that named a city were renamed, not

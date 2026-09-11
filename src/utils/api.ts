@@ -1,8 +1,11 @@
 import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios';
 
-// Get configured data portal URL from environment
-const DATA_PORTAL_URL = process.env.DATA_PORTAL_URL ?? '';
-const DEFAULT_BASE_URL: string = DATA_PORTAL_URL;
+// No default portal lives here. Every request names the portal of the call it serves: callers
+// pass `baseUrl`, built from the domain their own call resolved (src/utils/portal-config.ts).
+// This module used to snapshot DATA_PORTAL_URL at load as a fallback base URL — a second
+// default-portal layer, read before src/index.ts had run dotenv.config() (server#63).
+const MISSING_BASE_URL =
+  'No portal base URL was given for this request; the caller must pass the base URL of the portal its call names.';
 const SOCRATA_APP_TOKEN = process.env.SOCRATA_APP_TOKEN ?? '';
 
 const DATASET_PATH_REGEX = /\/resource\/(\w{4}-\w{4})\.json$/i;
@@ -62,9 +65,9 @@ async function requestWithRetry<T>(config: AxiosRequestConfig): Promise<AxiosRes
   throw lastError!;
 }
 
-function buildSoda3Url(datasetId: string, baseUrl: string = DEFAULT_BASE_URL): string {
+function buildSoda3Url(datasetId: string, baseUrl: string): string {
   if (!baseUrl) {
-    throw new Error('DATA_PORTAL_URL is not configured');
+    throw new Error(MISSING_BASE_URL);
   }
   const trimmedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
   return `${trimmedBase}/api/v3/views/${datasetId}/query.json`;
@@ -162,9 +165,16 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 /**
- * Helper function to make API requests to Socrata SODA3 endpoints
+ * Helper function to make API requests to Socrata SODA3 endpoints.
+ *
+ * `baseUrl` is required and has no default: it is the portal of the call being served. A call
+ * without one throws here, before any request, and never falls back to the environment.
  */
-export async function fetchFromSocrataApi<T>(path: string, params: Record<string, unknown> = {}, baseUrl = DEFAULT_BASE_URL): Promise<T> {
+export async function fetchFromSocrataApi<T>(path: string, params: Record<string, unknown> = {}, baseUrl: string): Promise<T> {
+  if (!baseUrl) {
+    throw new Error(MISSING_BASE_URL);
+  }
+
   try {
     const tokenHeader = buildTokenHeader();
 
@@ -183,10 +193,6 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
         }
       });
       return response.data;
-    }
-
-    if (!baseUrl) {
-      throw new Error('DATA_PORTAL_URL is not configured');
     }
 
     const trimmedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;

@@ -44,6 +44,13 @@ services:
     domains:
       - socrata-mcp.civicaitools.org
     envVars:
+      # Optional in code (server#63). Set: the default portal for a tool call
+      # that names none. Unset: there is no default, and such a call is refused
+      # per call with a JSON-RPC -32602 error. The reference deployment sets it
+      # in the dashboard; because this service auto-deploys from main, confirm
+      # it is still set before merging a change that depends on it. A
+      # single-portal instance sets it to the same portal as the website's
+      # SITE_DEFAULT_PORTAL.
       - key: DATA_PORTAL_URL
         sync: false
       # REQUIRED VALUE: 22 (dashboard). Do not lower this below 22, and never

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { type JsonSchema7Type } from 'zod-to-json-schema'; // Keep for typing if manually constructing
 import { Tool } from '@modelcontextprotocol/sdk/types.js'; // Suffix needed
 import { McpError, ErrorCode } from '../utils/mcp-errors.js';
-import { getDefaultDomain } from '../utils/portal-config.js';
+import { getDefaultDomain, resolvePortalDomain, NO_DEFAULT_PORTAL } from '../utils/portal-config.js';
 import {
   fetchFromSocrataApi,
   DatasetMetadata,
@@ -26,9 +26,15 @@ export type ToolWithHandler = Tool & {
   handler: (params: Record<string, unknown>) => Promise<unknown>;
 };
 
-// The configured portal's host. One implementation, in ../utils/portal-config.js,
-// so src/index.ts resolves the same value instead of naming a portal in literal
-// text (server#61).
+// The portal a call addresses is resolved per call by ../utils/portal-config.js: the one the
+// call names, else the configured default, else a refusal (server#63). src/index.ts resolves
+// through the same module rather than naming a portal in literal text (server#61). These say,
+// per tool, what a caller does instead when refused.
+const GET_DATA_NAMES_A_PORTAL = 'Pass "domain" with the host of the Socrata portal to query, then call again.';
+const FETCH_NAMES_A_PORTAL =
+  "Use an identifier that names its portal: dataset:<portal-host>:<dataset-id>, record:<portal-host>:<dataset-id>:<row-id>, or the dataset's URL on its portal.";
+const SEARCH_NAMES_A_PORTAL =
+  'search takes no portal argument, so it runs only against a configured default. To find datasets on a portal you name, call get_data with type "catalog", a "query", and "domain" set to that portal\'s host.';
 
 // Handler for catalog functionality
 async function handleCatalog(params: {
@@ -37,7 +43,8 @@ async function handleCatalog(params: {
   limit?: number;
   offset?: number;
 }): Promise<DatasetMetadata[]> {
-  const { query, domain = getDefaultDomain(), limit = 10, offset = 0 } = params;
+  const { query, limit = 10, offset = 0 } = params;
+  const domain = resolvePortalDomain(params.domain, GET_DATA_NAMES_A_PORTAL);
 
   const apiParams: Record<string, unknown> = {
     limit,
@@ -74,7 +81,7 @@ async function handleCatalog(params: {
 async function handleCategories(params: {
   domain?: string;
 }): Promise<CategoryInfo[]> {
-  const { domain = getDefaultDomain() } = params;
+  const domain = resolvePortalDomain(params.domain, GET_DATA_NAMES_A_PORTAL);
 
   const apiParams: Record<string, unknown> = {
     search_context: domain // Add search_context parameter with the domain
@@ -124,7 +131,7 @@ async function handleCategories(params: {
 async function handleTags(params: {
   domain?: string;
 }): Promise<TagInfo[]> {
-  const { domain = getDefaultDomain() } = params;
+  const domain = resolvePortalDomain(params.domain, GET_DATA_NAMES_A_PORTAL);
 
   const apiParams: Record<string, unknown> = {
     search_context: domain // Add search_context parameter with the domain
@@ -175,7 +182,8 @@ async function handleDatasetMetadata(params: {
   datasetId: string;
   domain?: string;
 }): Promise<Record<string, unknown>> {
-  const { datasetId, domain = getDefaultDomain() } = params;
+  const { datasetId } = params;
+  const domain = resolvePortalDomain(params.domain, GET_DATA_NAMES_A_PORTAL);
 
   const baseUrl = `https://${domain}`;
   const response = await fetchFromSocrataApi<Record<string, unknown>>(
@@ -192,7 +200,8 @@ async function handleColumnInfo(params: {
   datasetId: string;
   domain?: string;
 }): Promise<ColumnInfo[]> {
-  const { datasetId, domain = getDefaultDomain() } = params;
+  const { datasetId } = params;
+  const domain = resolvePortalDomain(params.domain, GET_DATA_NAMES_A_PORTAL);
 
   const baseUrl = `https://${domain}`;
   const response = await fetchFromSocrataApi<ColumnInfo[]>(
@@ -212,7 +221,8 @@ async function handleMetrics(params: {
   datasetId: string;
   domain?: string;
 }): Promise<Record<string, unknown>> {
-  const { datasetId, domain = getDefaultDomain() } = params;
+  const { datasetId } = params;
+  const domain = resolvePortalDomain(params.domain, GET_DATA_NAMES_A_PORTAL);
 
   const baseUrl = `https://${domain}`;
 
@@ -265,7 +275,6 @@ async function handleDataAccess(params: {
 }): Promise<Record<string, unknown>[]> {
   const {
     datasetId,
-    domain = getDefaultDomain(),
     soqlQuery,
     limit = 10,
     offset = 0,
@@ -276,6 +285,7 @@ async function handleDataAccess(params: {
     having,
     q
   } = params;
+  const domain = resolvePortalDomain(params.domain, GET_DATA_NAMES_A_PORTAL);
 
   const apiParams: Record<string, unknown> = {};
 
@@ -325,7 +335,7 @@ export const socrataToolZodSchema = z.object({
   // No portal example here: this schema is used only to parse incoming
   // arguments, never advertised, so it must not carry a domain snapshotted at
   // module-load time. The advertised copy is jsonParameters.properties.domain.
-  domain: z.string().optional().describe('The Socrata domain to query; defaults to the portal this server is configured for'),
+  domain: z.string().optional().describe('The Socrata domain to query; defaults to the configured portal (DATA_PORTAL_URL) when one is set, and a call without one is refused when none is'),
   portal: z.string().optional().describe('Alias for domain — the Socrata portal domain'),
   limit: z.union([z.coerce.number().int().positive(), z.literal('all')]).optional().describe('Number of results to return, or "all" to fetch all available data up to configured cap'),
   offset: z.number().int().nonnegative().optional().describe('Offset for pagination'),
@@ -362,9 +372,13 @@ const jsonParameters: any = {
       type: 'string',
       // A getter for the same reason SEARCH_TOOL's description is one: this
       // object is serialized into tools/list on every request, and the example
-      // has to be the portal this server is actually configured for.
+      // has to be the portal this server is actually configured for — or, when it is configured
+      // for none, say so, and that the argument is then required.
       get description() {
-        return `The Socrata domain to query; defaults to the portal this server is configured for (${getDefaultDomain()})`;
+        const domain = getDefaultDomain();
+        return domain
+          ? `The Socrata domain to query; defaults to the portal this server is configured for (${domain})`
+          : `The Socrata domain to query: the host of the portal this call is about. Required on every call, because this server has ${NO_DEFAULT_PORTAL}; a call without one is refused.`;
       }
     },
     portal: {
@@ -454,10 +468,14 @@ export const UNIFIED_SOCRATA_TOOL: ToolWithHandler = {
 export const SEARCH_TOOL: ToolWithHandler = {
   name: 'search',
   get title() {
-    return `Search ${getDefaultDomain()}`;
+    const domain = getDefaultDomain();
+    return domain ? `Search ${domain}` : `Search (${NO_DEFAULT_PORTAL})`;
   },
   get description() {
-    return `Search the open data portal this server is configured for (${getDefaultDomain()}) and return matching dataset IDs`;
+    const domain = getDefaultDomain();
+    return domain
+      ? `Search the open data portal this server is configured for (${domain}) and return matching dataset IDs`
+      : `Search a configured default portal and return matching dataset IDs. This server has ${NO_DEFAULT_PORTAL}, so search is refused; to find datasets on a portal you name, use get_data with type "catalog", a "query" and that portal's host as "domain".`;
   },
   inputSchema: searchJsonParameters,  // Latest MCP spec uses 'inputSchema'
   handler: handleSearchTool as (params: Record<string, unknown>) => Promise<unknown>
@@ -467,10 +485,14 @@ export const SEARCH_TOOL: ToolWithHandler = {
 export const FETCH_TOOL: ToolWithHandler = {
   name: 'fetch',
   get title() {
-    return `Fetch Document from ${getDefaultDomain()}`;
+    const domain = getDefaultDomain();
+    return domain ? `Fetch Document from ${domain}` : 'Fetch Document';
   },
   get description() {
-    return `Retrieve full dataset metadata or record content from the open data portal this server is configured for (${getDefaultDomain()})`;
+    const domain = getDefaultDomain();
+    return domain
+      ? `Retrieve full dataset metadata or record content from the open data portal this server is configured for (${domain})`
+      : `Retrieve full dataset metadata or record content from a Socrata open data portal. This server has ${NO_DEFAULT_PORTAL}, so the identifier must name its portal: dataset:<portal-host>:<dataset-id>, record:<portal-host>:<dataset-id>:<row-id>, or the dataset's URL.`;
   },
   inputSchema: fetchJsonParameters,
   handler: handleFetchTool as (params: Record<string, unknown>) => Promise<unknown>
@@ -493,16 +515,13 @@ export async function handleSocrataTool(
   const type = params.type; // Directly use the parsed 'type'
   const query = params.query; // Directly use the parsed 'query'
 
-  // Use a mutable copy for potential modifications like adding default domain/limit/offset.
-  const modifiableParams: Partial<SocrataToolParams> = { ...params };
+  // Every operation type addresses exactly one portal: the one this call names (`domain`, or
+  // its alias `portal`), else the configured default. With neither, the call is refused here,
+  // before any branch can make a request.
+  const domain = resolvePortalDomain(params.domain, GET_DATA_NAMES_A_PORTAL);
 
-  // Ensure a default domain is set if not provided, applicable to most handlers
-  if (!modifiableParams.domain) {
-    modifiableParams.domain = getDefaultDomain();
-  }
-  if (!modifiableParams.domain && ['catalog', 'metadata', 'query', 'metrics'].includes(type)) {
-    throw new Error('Domain parameter is required for this operation type and no default DATA_PORTAL_URL is configured.');
-  }
+  // Use a mutable copy for potential modifications like adding default limit/offset.
+  const modifiableParams: Partial<SocrataToolParams> = { ...params, domain };
 
   // Default for limit/offset might apply to 'catalog' and 'query' (data-access)
   if (modifiableParams.limit === undefined && (type === 'catalog' || type === 'query')) {
@@ -520,7 +539,7 @@ export async function handleSocrataTool(
                           typeof modifiableParams.limit === 'number' ? modifiableParams.limit : 10;
       return handleCatalog({ 
         query: modifiableParams.query, 
-        domain: modifiableParams.domain, 
+        domain, 
         limit: catalogLimit, 
         offset: modifiableParams.offset 
       });
@@ -529,13 +548,12 @@ export async function handleSocrataTool(
       if (!metadataDatasetId) throw new Error('dataset_id is required for type=metadata');
       return handleDatasetMetadata({
         datasetId: metadataDatasetId,
-        domain: modifiableParams.domain
+        domain
       });
     case 'query': // This corresponds to 'data-access'
       const {
         dataset_id: dsId,
         query: queryField,
-        domain: domainField,
         limit: limitField,
         offset: offsetField,
         select: selectField,
@@ -578,7 +596,7 @@ export async function handleSocrataTool(
 
       return handleSearch({
         datasetId: effectiveDatasetId,
-        domain: domainField || getDefaultDomain(),
+        domain,
         soqlQuery: passAsSoqlQuery,
         limit: limitField as number | 'all' | undefined,
         offset: offsetField,
@@ -594,7 +612,7 @@ export async function handleSocrataTool(
       if (!metricsDatasetId) throw new Error('dataset_id is required for type=metrics');
       return handleMetrics({
         datasetId: metricsDatasetId,
-        domain: modifiableParams.domain
+        domain
       });
     default:
       const exhaustiveCheck: never = type;
@@ -623,6 +641,12 @@ interface ParsedFetchIdentifier {
 function tryParseUrlIdentifier(input: string): ParsedFetchIdentifier | null {
   try {
     const url = new URL(input);
+    // `data.example.gov:abcd-1234` parses as a URL whose scheme is the host and whose hostname
+    // is empty. Returning that empty domain let the fetch handler fill it with the default
+    // portal — a portal the call did not name. Leave it to the `<domain>:<dataset-id>` branch.
+    if (!url.hostname) {
+      return null;
+    }
     const datasetMatch = url.pathname.match(DATASET_ID_IN_PATH_REGEX);
     if (!datasetMatch) {
       return null;
@@ -699,10 +723,12 @@ function parseFetchIdentifier(rawId: string): ParsedFetchIdentifier {
     return parsed;
   }
 
+  // A bare dataset id, or `<dataset-id>:<row-id>`, names no portal: it resolves against the
+  // configured default, and with none configured the call is refused before any request.
   if (STRICT_DATASET_ID_REGEX.test(trimmed)) {
     return {
       kind: 'dataset',
-      domain: getDefaultDomain(),
+      domain: resolvePortalDomain(undefined, FETCH_NAMES_A_PORTAL),
       datasetId: trimmed.toLowerCase()
     };
   }
@@ -713,7 +739,7 @@ function parseFetchIdentifier(rawId: string): ParsedFetchIdentifier {
     if (STRICT_DATASET_ID_REGEX.test(first) && second) {
       return {
         kind: 'record',
-        domain: getDefaultDomain(),
+        domain: resolvePortalDomain(undefined, FETCH_NAMES_A_PORTAL),
         datasetId: first.toLowerCase(),
         recordId: second
       };
@@ -783,7 +809,12 @@ export async function handleSearchTool(
 ): Promise<{ content: { type: 'text'; text: string }[] }> {
   const { query } = searchToolZodSchema.parse(rawParams);
 
-  const domain = getDefaultDomain();
+  // search takes only a query (its schema is the single-string shape some clients require), so a
+  // call cannot name a portal. It runs against the configured default, or it is refused.
+  // Socrata's cross-portal discovery endpoint was measured and not chosen: it is regional
+  // (api.us.socrata.com, api.eu.socrata.com), and each region's catalogue omits the other's
+  // portals, so answering through one would be a default again, a regional one.
+  const domain = resolvePortalDomain(undefined, SEARCH_NAMES_A_PORTAL);
   const catalogResults = await handleCatalog({
     query,
     domain,
@@ -841,9 +872,9 @@ export async function handleFetchTool(
 ): Promise<{ content: { type: 'text'; text: string }[] }> {
   const { id } = fetchToolZodSchema.parse(rawParams);
 
-  const { kind, domain, datasetId, recordId } = parseFetchIdentifier(id);
-
-  const resolvedDomain = domain || getDefaultDomain();
+  // parseFetchIdentifier returns the portal the identifier names, or the configured default for
+  // an identifier that names none, or refuses. No fallback is left to apply here.
+  const { kind, domain: resolvedDomain, datasetId, recordId } = parseFetchIdentifier(id);
 
   if (kind === 'dataset') {
     const metadata = await handleDatasetMetadata({

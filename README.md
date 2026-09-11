@@ -34,12 +34,14 @@ Add this to your Claude Desktop config (`~/Library/Application Support/Claude/cl
       "command": "npx",
       "args": ["-y", "socrata-mcp-server", "--stdio"],
       "env": {
-        "DEFAULT_DOMAIN": "data.cityofnewyork.us"
+        "DATA_PORTAL_URL": "https://data.cityofnewyork.us"
       }
     }
   }
 }
 ```
+
+`DATA_PORTAL_URL` is optional; see [Environment variables](#environment-variables) for what leaving it unset means.
 
 ### Development
 
@@ -56,10 +58,14 @@ npm run dev   # Starts on http://localhost:10000 (with PORT=10000 from .env)
 ```bash
 # .env
 PORT=10000                                     # Project convention (local dev + Render). The code falls back to 8000 if PORT is unset.
-DATA_PORTAL_URL=https://data.cityofnewyork.us  # Default portal (optional)
+DATA_PORTAL_URL=https://data.cityofnewyork.us  # Optional. The default portal for a call that names none. Unset: no default (below).
 SOCRATA_APP_TOKEN=                             # Optional Socrata app token, sent as X-App-Token on portal requests for higher rate limits. Without it, portals apply stricter anonymous throttling.
 SKILL_POSTURE=                                 # Optional skill-guidance posture. Unset: generic web overlay only. `reference-demo`: appends the demo-posture overlay (demo limits + CTA) for web modality. See https://github.com/npstorey/civic-ai-tools/blob/main/docs/skills/README.md for the composition model.
 ```
+
+**`DATA_PORTAL_URL` is optional, and absent means absent.** Set, it is the portal a tool call uses when the call names none. Unset, the server has no default portal and does not choose one on a caller's behalf: a call that names no portal — `get_data` without `domain`, `fetch` by a bare dataset id, or `search` (which takes no portal argument) — is refused, per call, with a JSON-RPC error (code `-32602`) that says how to name one. Calls that name their portal (`domain` on `get_data`; `dataset:<portal-host>:<dataset-id>` or a dataset URL on `fetch`) work either way. The tool, prompt and resource text names the configured portal, or states that none is configured. A server fronting several portals can leave it unset; the server does not start with a portal of its own.
+
+An instance of the [civic-ai-tools website](https://github.com/npstorey/civic-ai-tools-website) that fronts a single portal sets this server's `DATA_PORTAL_URL` and the app's `SITE_DEFAULT_PORTAL` to the same portal.
 
 ## Available tools
 
