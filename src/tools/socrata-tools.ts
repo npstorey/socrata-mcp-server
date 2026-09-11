@@ -475,7 +475,7 @@ export const SEARCH_TOOL: ToolWithHandler = {
     const domain = getDefaultDomain();
     return domain
       ? `Search the open data portal this server is configured for (${domain}) and return matching dataset IDs`
-      : `Search the open data portal this server is configured for and return matching dataset IDs. This server has ${NO_DEFAULT_PORTAL}, so search is refused; to find datasets on a portal you name, use get_data with type "catalog", a "query" and that portal's host as "domain".`;
+      : `Search a configured default portal and return matching dataset IDs. This server has ${NO_DEFAULT_PORTAL}, so search is refused; to find datasets on a portal you name, use get_data with type "catalog", a "query" and that portal's host as "domain".`;
   },
   inputSchema: searchJsonParameters,  // Latest MCP spec uses 'inputSchema'
   handler: handleSearchTool as (params: Record<string, unknown>) => Promise<unknown>

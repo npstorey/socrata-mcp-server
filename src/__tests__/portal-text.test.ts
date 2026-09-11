@@ -99,6 +99,12 @@ const URL_WITH_HOST = /:\/\/(?:[a-z0-9-]+\.)+[a-z]{2,}/gi;
  */
 const NO_DEFAULT_PORTAL_WORDS = 'no default portal configured';
 
+/**
+ * Phrasings that assert a portal is configured. With none configured, no surface may use them,
+ * not even ahead of a sentence saying there is none: the earlier sentence is still false.
+ */
+const CLAIMS_A_CONFIGURED_PORTAL = ['configured for', 'defaults to the portal'];
+
 /** Every string value reachable in a response, tagged with where it came from. */
 function collectStrings(value: unknown, path: string, out: Array<{ path: string; text: string }>): void {
   if (typeof value === 'string') {
@@ -338,6 +344,22 @@ describe('advertised text describes the configured portal', () => {
         }
       }
       expect(silent, `no statement that there is no default portal in:\n${silent.join('\n')}`).toEqual([]);
+    });
+
+    it('claims a configured portal on no surface it sends', () => {
+      const claims: string[] = [];
+      for (const surface of surfaces) {
+        const strings: Array<{ path: string; text: string }> = [];
+        collectStrings(surface.response, surface.label, strings);
+        for (const { path, text } of strings) {
+          for (const phrase of CLAIMS_A_CONFIGURED_PORTAL) {
+            if (text.toLowerCase().includes(phrase)) {
+              claims.push(`${path}: "${phrase}" in ${JSON.stringify(text.slice(0, 160))}`);
+            }
+          }
+        }
+      }
+      expect(claims, `configured for no portal, but claims one:\n${claims.join('\n')}`).toEqual([]);
     });
 
     it('still serves the skill-guidance prompt (excluded from the assertions above)', () => {
