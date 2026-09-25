@@ -38,9 +38,15 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
 - `npm run clean && npm run build:tsc` — `tsc --outDir dist`, silent on success. CI runs
   those two pieces rather than `npm run build`, whose `prebuild-check` step dumps ~1,100
   lines of SDK diagnostics and produces no artifacts.
-- `npm test` — `Test Files 15 passed | 2 skipped (17)`, `Tests 92 passed | 9 skipped (101)`.
+- `npm test` — `Test Files 20 passed | 2 skipped (22)`, `Tests 186 passed | 9 skipped (195)`.
   The 9: 6 live-API integration tests behind `RUN_INTEGRATION=1` (`npm run
   test:integration`), and 3 hardcoded `.skip`s in the transport-sequence tests.
+  <!-- measured 2026-09-25 at the container-image PR; the counts recorded before it (15/2/17, 92/9/101) were already stale on main -->
+- The `container-image` job (same workflow) builds the `Dockerfile`, runs the image read-only as
+  a non-root user, checks `/healthz`, scans the image for `.env`/`.git`/a planted decoy value, and
+  makes a live portal call through a CONNECT-only proxy from a network with no other way out
+  (`scripts/connect-only-proxy.mjs`, `scripts/mcp-portal-call.mjs`). Docker locally:
+  `docker build -t socrata-mcp-server . && docker run --rm -p 8000:8000 socrata-mcp-server`.
 - `npm run lint` — a pass here is **`✖ 117 problems (0 errors, 117 warnings)`** with
   exit 0. The warnings are pre-existing; don't clear them as a side effect of another
   change.
@@ -63,6 +69,12 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
   deployment supplies its own.
 - `SKILL_POSTURE` — optional; deployment posture overlay. Semantics in
   [`.claude/rules/skills.md`](.claude/rules/skills.md).
+- `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` — optional; the egress proxy for portal calls, honoured
+  through a CONNECT tunnel by `src/utils/outbound-proxy.ts` (installed from `src/index.ts` after
+  dotenv). Unset, nothing is installed. axios's own reading of these variables sends `https://`
+  requests to the proxy in absolute form, no tunnel, which a CONNECT-only proxy refuses; that is
+  why the module exists. README "Run in a container" has the operator-facing semantics.
+- `ROW_FETCH_CAP`, `MAX_RAW_ROWS` — optional row caps (`src/tools/search.ts`).
 
 ## Architecture
 
@@ -73,6 +85,9 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
   [`.claude/rules/skills.md`](.claude/rules/skills.md).
 - `src/tools/`, `src/utils/`, `src/schema/` — tool schemas and handlers; Socrata API
   client, cache and portal metadata; shared request schemas.
+- `Dockerfile`, `.dockerignore` — the HTTP transport as a container image (multi-stage,
+  non-root, `ARG NODE_IMAGE` for the base). The reference deployment on Render does not use
+  it; a downstream deployment that runs this server beside its application does.
 
 Cross-repo architecture documents and spec drafts live in the hub repo at
 [`civic-ai-tools/docs/architecture/`](https://github.com/npstorey/civic-ai-tools/tree/main/docs/architecture)
