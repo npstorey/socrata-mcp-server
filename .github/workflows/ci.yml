@@ -59,3 +59,173 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+  # THE CONTAINER IMAGE, BUILT AND RUN. `build-test-lint` above proves the
+  # code; nothing in it proves the Dockerfile, and a deployment that runs this
+  # server as a container from it (a private network whose only way out is an
+  # egress proxy) depends on four things no unit test can see:
+  #
+  #   1. the image builds from a `.dockerignore`-filtered context and serves
+  #      /healthz and /mcp when run;
+  #   2. it runs as a non-root user under a read-only root filesystem;
+  #   3. no environment file, repository history or planted secret value is
+  #      in any layer, not only the finished filesystem;
+  #   4. a portal call from the running container goes through a CONNECT-only
+  #      proxy when HTTPS_PROXY names one, measured from a network with no
+  #      other way out, with the same image failing the same call when no
+  #      proxy is set (the control that says the network really is closed).
+  #
+  # Each is measured against the image as built here, by the commands an
+  # operator would run. The job's id is its check name, kept stable so it can
+  # be made a required check; the job passes no build argument, so what is
+  # measured is the image an operator's first `docker build .` produces.
+  #
+  # The portal call is live (a real Socrata portal, through the proxy). It is
+  # the one thing in this workflow that depends on a service outside this
+  # repository, and it is here because the deployment this image is for
+  # cannot work without it; a red from a portal outage reads as such in the
+  # proxy log printed on failure.
+  #
+  # Credential-free like the job above: no `secrets.`, no `env:` at job level.
+  container-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      # A decoy environment file with a value unique to this run, planted in
+      # the build context before the build. If it or its value can be found
+      # anywhere in the image afterwards, the exclusion is not working.
+      - name: Plant a decoy .env in the build context
+        run: printf 'DECOY_SECRET=decoy-value-%s\n' "$GITHUB_RUN_ID" > .env
+
+      - name: Build the image (dockerignore-filtered context, no build arguments)
+        run: docker build --progress=plain -t socrata-mcp-server:ci .
+
+      - name: No .env, .git or decoy value in the finished filesystem or in any layer
+        run: |
+          set -euo pipefail
+          hits=$(docker run --rm --entrypoint sh socrata-mcp-server:ci -c \
+            'find / -xdev \( -name ".env" -o -name ".env.*" -o -name ".git" -o -name "auth.json" -o -name "credentials*" -o -name "*.pem" -o -name "*.key" \) -print 2>/dev/null' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::secret-shaped paths in the image filesystem:"
+            echo "$hits"
+            exit 1
+          fi
+          docker save socrata-mcp-server:ci -o /tmp/image.tar
+          if grep -a -q "decoy-value-$GITHUB_RUN_ID" /tmp/image.tar; then
+            echo "::error::the decoy .env value is present in an image layer"
+            exit 1
+          fi
+          rm -f /tmp/image.tar
+          echo "OK: no .env, .git, key or credential file in the filesystem; decoy value in no layer"
+
+      - name: Run read-only as a non-root user; /healthz answers 200; /mcp speaks MCP
+        run: |
+          set -euo pipefail
+          docker run -d --name server --read-only -p 127.0.0.1:8000:8000 socrata-mcp-server:ci
+          code=""
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/healthz || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          if [ "$code" != "200" ]; then
+            echo "::error::/healthz did not answer 200 within 30s (last: '$code')"
+            docker logs server
+            exit 1
+          fi
+          echo "OK: /healthz 200"
+
+          # The server process itself (PID 1), not only the configured USER.
+          uid=$(docker exec server sh -c 'awk "/^Uid:/ {print \$2}" /proc/1/status')
+          if [ "$uid" = "0" ] || [ -z "$uid" ]; then
+            echo "::error::the server runs as uid '$uid'"
+            exit 1
+          fi
+          echo "OK: server runs as uid $uid"
+
+          # The read-only flag really applied: a write anywhere on the root fails.
+          if docker exec server sh -c 'echo x > /app/probe 2>/dev/null || echo x > /probe 2>/dev/null'; then
+            echo "::error::a write on the read-only root filesystem succeeded"
+            exit 1
+          fi
+          echo "OK: root filesystem is read-only"
+
+          SMOKE_MCP_URL=http://127.0.0.1:8000/mcp node scripts/smoke-deployed-endpoint.mjs
+
+          if docker logs server 2>&1 | grep -qiE "EROFS|read-only file system|unhandledRejection"; then
+            echo "::error::the container logged a write failure under the read-only root"
+            docker logs server
+            exit 1
+          fi
+
+      # Two networks: one with no route out (`--internal`), where the server
+      # and the caller live, and one ordinary bridge. Only the proxy is on
+      # both, so a portal call from the server can succeed only through it.
+      - name: A portal call through a CONNECT-only proxy, from a network with no other way out
+        run: |
+          set -euo pipefail
+          docker network create --internal closed >/dev/null
+          docker network create open >/dev/null
+          docker run -d --name proxy --network open \
+            -v "$PWD/scripts:/scripts:ro" -e PROXY_BIND=0.0.0.0 -e PROXY_PORT=3128 \
+            node:22-bookworm-slim node /scripts/connect-only-proxy.mjs
+          docker network connect closed proxy
+
+          docker run -d --name proxied --network closed --read-only \
+            -e HTTPS_PROXY=http://proxy:3128 socrata-mcp-server:ci
+          docker run -d --name unproxied --network closed --read-only socrata-mcp-server:ci
+
+          # Wait for both servers from inside the closed network.
+          docker run --rm --network closed node:22-bookworm-slim node -e '
+            const hosts = ["proxied", "unproxied"];
+            const deadline = Date.now() + 60000;
+            (async () => {
+              for (const host of hosts) {
+                for (;;) {
+                  try { const r = await fetch(`http://${host}:8000/healthz`); if (r.status === 200) break; } catch {}
+                  if (Date.now() > deadline) { console.error(`${host}: no /healthz 200 within 60s`); process.exit(1); }
+                  await new Promise(r => setTimeout(r, 1000));
+                }
+                console.log(`${host}: /healthz 200`);
+              }
+            })();'
+
+          echo "--- through the proxy (must succeed)"
+          docker run --rm --network closed -v "$PWD/scripts:/scripts:ro" node:22-bookworm-slim \
+            node /scripts/mcp-portal-call.mjs http://proxied:8000/mcp data.cityofnewyork.us
+
+          echo "--- with no proxy set (must fail: the network has no other way out)"
+          if docker run --rm --network closed -v "$PWD/scripts:/scripts:ro" node:22-bookworm-slim \
+            node /scripts/mcp-portal-call.mjs http://unproxied:8000/mcp data.cityofnewyork.us; then
+            echo "::error::the unproxied container reached the portal, so the closed network is not closed and the proxied result proves nothing"
+            exit 1
+          fi
+
+          echo "--- what the proxy saw"
+          docker logs proxy
+          tunnels=$(docker logs proxy 2>&1 | grep -c "CONNECT data.cityofnewyork.us:443" || true)
+          refused=$(docker logs proxy 2>&1 | grep -c "refused" || true)
+          if [ "$tunnels" -lt 1 ]; then
+            echo "::error::the proxy recorded no CONNECT to the portal"
+            exit 1
+          fi
+          if [ "$refused" -ne 0 ]; then
+            echo "::error::the proxy refused $refused plain (non-CONNECT) request(s): the server is not tunnelling every call"
+            exit 1
+          fi
+          echo "OK: $tunnels CONNECT tunnel(s) to the portal, 0 plain requests"
+
+      - name: Container logs
+        if: always()
+        run: |
+          for c in server proxied unproxied proxy; do
+            echo "=== $c"; docker logs "$c" 2>&1 | tail -60 || true
+          done
+          docker rm -f server proxied unproxied proxy >/dev/null 2>&1 || true
+          docker network rm closed open >/dev/null 2>&1 || true

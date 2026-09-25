@@ -34,6 +34,7 @@ import {
 import { McpError, ErrorCode } from './utils/mcp-errors.js';
 import { composeSkillGuidance } from './skills/compose.js';
 import { getDefaultDomain, describeConfiguredPortal, NO_DEFAULT_PORTAL } from './utils/portal-config.js';
+import { installOutboundProxy } from './utils/outbound-proxy.js';
 
 // NOTE(#47): the prompts/resources request schemas were previously hand-rolled
 // here behind a comment claiming they were "not properly exported from SDK".
@@ -42,6 +43,11 @@ import { getDefaultDomain, describeConfiguredPortal, NO_DEFAULT_PORTAL } from '.
 // removed. Import the SDK's own schemas instead.
 
 dotenv.config();
+
+// After dotenv, before any portal call: HTTP_PROXY / HTTPS_PROXY / NO_PROXY,
+// when set, route portal calls through a CONNECT tunnel (src/utils/outbound-proxy.ts).
+// With none of them set this installs nothing.
+installOutboundProxy();
 
 /**
  * Advertised identifiers that used to name one city.

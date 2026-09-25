@@ -100,7 +100,51 @@ The deployed instance at `https://socrata-mcp.civicaitools.org/mcp` powers [civi
 
 That endpoint is watched by a scheduled [deployed-endpoint smoke](.github/workflows/deployed-endpoint-smoke.yml): a daily MCP handshake at the current protocol revision, run against the live service. It exists because the two outages this server has had — a protocol-ceiling skew ([#44](https://github.com/npstorey/socrata-mcp-server/issues/44)) and a Node-runtime floor ([#47](https://github.com/npstorey/socrata-mcp-server/issues/47)) — were both host-side drift with no commit behind them, invisible to the unit suite by construction. Run it yourself with `npm run smoke:deployed`, or against another instance with `SMOKE_MCP_URL=https://your-host/mcp npm run smoke:deployed`. No credentials needed; this server requires no authentication.
 
-To run your own hosted instance, [`render.yaml`](render.yaml) mirrors the deployed instance's Render configuration and can be used as a Render Blueprint; any host that can run `npm run build && npm start` on Node 22+ with `PORT` set will do. If you fork from `render.yaml`, you **must** change its `name:` and `domains:` values — they belong to the reference deployment. The optional `SKILL_POSTURE` env var (see [Environment variables](#environment-variables)) controls whether the reference-demo posture overlay is appended to the web skill guidance; leave it unset for a generic deployment.
+To run your own hosted instance, [`render.yaml`](render.yaml) mirrors the deployed instance's Render configuration and can be used as a Render Blueprint; any host that can run `npm run build && npm start` on Node 22+ with `PORT` set will do. If you fork from `render.yaml`, you **must** change its `name:` and `domains:` values — they belong to the reference deployment. The optional `SKILL_POSTURE` env var (see [Environment variables](#environment-variables)) controls whether the reference-demo posture overlay is appended to the web skill guidance; leave it unset for a generic deployment. To run it as a container instead, see [Run in a container](#run-in-a-container).
+
+## Run in a container
+
+The [`Dockerfile`](Dockerfile) builds the HTTP transport as an image: a multi-stage build (`npm ci`, then the same `clean` and `build:tsc` steps CI runs), a runtime stage with production dependencies only, running as the image's non-root `node` user with `NODE_ENV=production`. It serves `/mcp` and `/healthz` on `PORT` (8000 unless set).
+
+```bash
+docker build -t socrata-mcp-server .
+docker run --rm -p 8000:8000 -e DATA_PORTAL_URL=https://data.cityofnewyork.us socrata-mcp-server
+curl -fsS http://127.0.0.1:8000/healthz
+```
+
+The base image is a build argument, `NODE_IMAGE` (default `node:22-bookworm-slim`), so a deployment pipeline can substitute its own Node 22 image: `docker build --build-arg NODE_IMAGE=<your-image> .`. Nothing enters the image at build time but the source and the lockfile ([`.dockerignore`](.dockerignore) keeps `.env*`, `node_modules`, `dist`, `.git` and tests out of the build context); every setting below is read at run time from the container's environment.
+
+**Settings.** All optional.
+
+| Variable | What it does |
+| --- | --- |
+| `PORT` | The port the HTTP transport listens on. Default 8000, which is the port the image exposes. |
+| `DATA_PORTAL_URL` | The default portal for a call that names none, e.g. `https://data.cityofnewyork.us`. Unset: no default, and such a call is refused per call (see [Environment variables](#environment-variables)). An instance behind a single-portal deployment of the [civic-ai-tools website](https://github.com/npstorey/civic-ai-tools-website) sets this to the same portal as the app's `SITE_DEFAULT_PORTAL`. |
+| `SOCRATA_APP_TOKEN` | Sent as `X-App-Token` on every portal request, for the portal's higher rate limit. Without it, portals apply their anonymous throttle. |
+| `SKILL_POSTURE` | Skill-guidance posture overlay. Leave unset for a generic deployment. |
+| `ROW_FETCH_CAP` | Most rows a single "all rows" request will fetch across pages. Default 100000. |
+| `MAX_RAW_ROWS` | Most rows a non-aggregating query returns. Default 10000. |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | The egress proxy for portal calls, below. |
+
+**This server has no authentication.** Anything that can reach the port can query portals through it, so it belongs on a private network: an ECS service or a compose stack the application reaches by an internal name, not a public listener. The application in front of it then names this server's host in **its own** `NO_PROXY`, so that its calls to the server stay inside the network rather than being sent to the egress proxy; the server needs no such entry for itself. `/healthz` answers 200 and is the path to give the orchestrator's health check (an ECS task definition's `healthCheck`, Render's `healthCheckPath`); the image declares no `HEALTHCHECK` of its own, because the slim image has no `curl` and a probe would cost a Node process every interval. The server writes no file, so it runs under a read-only root filesystem (`docker run --read-only`); CI measures that, the non-root user and `/healthz` on every change, in the `container-image` job.
+
+**Through an egress proxy.** On a network where outbound traffic must leave through a proxy, set the conventional three and portal calls go through a `CONNECT` tunnel to it:
+
+```bash
+HTTPS_PROXY=http://proxy.internal:3128
+HTTP_PROXY=http://proxy.internal:3128
+NO_PROXY=.internal.example
+```
+
+With none of them set nothing is installed and every call is direct, exactly as before these existed. The lower-case spellings are read too and win when both are set; an `https://` destination uses `HTTPS_PROXY` and falls back to `HTTP_PROXY`; `localhost`, `127.0.0.1` and `[::1]` are always exempt and `NO_PROXY` is added to that (entries are exact hosts, or suffixes when they begin with `.` or `*`, optionally `:port`). A proxy address that carries a user and password (`http://user:pass@proxy`) is honoured, sent as `Proxy-Authorization` on the tunnel request, and never logged, but prefer one without: the address is readable by anything that can read the container's environment. A proxy that re-signs TLS is trusted the way Node trusts any private authority, through `NODE_EXTRA_CA_CERTS`. This needs code because axios, this server's HTTP client, reads the same variables but sends `https://` requests to the proxy as plain requests rather than opening a tunnel, which a proxy that admits HTTPS only through `CONNECT` refuses; [`src/utils/outbound-proxy.ts`](src/utils/outbound-proxy.ts) carries the measurement. To see it work locally, run the repository's CONNECT-only proxy and point the container at it:
+
+```bash
+node scripts/connect-only-proxy.mjs &      # on the host, 127.0.0.1:3128
+docker run --rm -p 8000:8000 -e HTTPS_PROXY=http://host.docker.internal:3128 socrata-mcp-server
+node scripts/mcp-portal-call.mjs http://127.0.0.1:8000/mcp data.cityofnewyork.us
+```
+
+The proxy prints one `CONNECT data.cityofnewyork.us:443` line per tunnel and `refused` for any plain request it is sent. CI runs the same call from a network whose only way out is that proxy.
 
 ## Development
 
