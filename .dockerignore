@@ -1,0 +1,44 @@
+# Build-context exclusions for the container image (see Dockerfile).
+#
+# `.env*` is excluded FIRST and without exception: anything copied into a
+# build stage is recoverable from the image layers. Configuration reaches the
+# container at RUN time, never at build time. (The Dockerfile copies only the
+# paths it names, so this file is the second lock on the same door.)
+.env
+.env.*
+
+# Reinstalled inside the image, from the lockfile, for the image's own platform.
+node_modules
+
+# Rebuilt inside the image.
+dist
+
+# Not needed to build or run the server.
+.git
+.github
+.claude
+.openai
+.vscode
+.idea
+coverage
+logs
+*.log
+.DS_Store
+temp
+
+# Test data and tests: repository material, not application material.
+src/__tests__
+test
+**/*.test.ts
+**/*.test.mjs
+
+# Repository material: documentation, deployment mirrors, tooling scripts.
+docs
+scripts
+render.yaml
+*.md
+LICENSE
+.prettierrc
+eslint.config.mjs
+vitest.config.ts
+.node-version
