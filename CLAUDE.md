@@ -38,10 +38,10 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
 - `npm run clean && npm run build:tsc` — `tsc --outDir dist`, silent on success. CI runs
   those two pieces rather than `npm run build`, whose `prebuild-check` step dumps ~1,100
   lines of SDK diagnostics and produces no artifacts.
-- `npm test` — `Test Files 20 passed | 2 skipped (22)`, `Tests 186 passed | 9 skipped (195)`.
+- `npm test` — `Test Files 21 passed | 2 skipped (23)`, `Tests 207 passed | 9 skipped (216)`.
   The 9: 6 live-API integration tests behind `RUN_INTEGRATION=1` (`npm run
   test:integration`), and 3 hardcoded `.skip`s in the transport-sequence tests.
-  <!-- measured 2026-09-25 at the container-image PR; the counts recorded before it (15/2/17, 92/9/101) were already stale on main -->
+  <!-- measured 2026-09-27 at the initialize-version test on branch `initialize-supported-version` (#70); the counts recorded before it (20/2/22, 186/9/195) were measured 2026-09-25 at the container-image PR -->
 - The `container-image` job (same workflow) builds the `Dockerfile`, runs the image read-only as
   a non-root user, checks `/healthz`, scans the image for `.env`/`.git`/a planted decoy value, and
   makes a live portal call through a CONNECT-only proxy from a network with no other way out
