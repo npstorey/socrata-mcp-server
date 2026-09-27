@@ -29,6 +29,8 @@ import {
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
   GetPromptRequestSchema,
+  LATEST_PROTOCOL_VERSION,
+  SUPPORTED_PROTOCOL_VERSIONS,
   type InitializeResult
 } from '@modelcontextprotocol/sdk/types.js';
 import { McpError, ErrorCode } from './utils/mcp-errors.js';
@@ -154,7 +156,15 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
   try {
     server.setRequestHandler(InitializeRequestSchema, async (request) => {
       console.error('[Server - Initialize] Request received:', JSON.stringify(request, null, 2));
-      const protocolVersion = request.params.protocolVersion || '2025-01-01';
+      // The SDK's own rule (server/index.js `_oninitialize`): agree to the requested version
+      // when the installed SDK supports it, otherwise answer the latest it supports. The SDK's
+      // HTTP transport refuses any later request whose MCP-Protocol-Version is outside
+      // SUPPORTED_PROTOCOL_VERSIONS, so agreeing to one would hand the client a session it
+      // cannot use (#70). src/__tests__/initialize-version.test.ts drives this handler.
+      const requestedVersion = request.params.protocolVersion;
+      const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requestedVersion)
+        ? requestedVersion
+        : LATEST_PROTOCOL_VERSION;
       
       // Try to get session ID from the custom transport
       let sessionId: string | undefined;
