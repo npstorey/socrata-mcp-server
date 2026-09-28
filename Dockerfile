@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # The server as a container: the Streamable HTTP transport on PORT (8000 unless
 # set), serving /mcp and /healthz, for a deployment that runs this server
 # beside the application that calls it. Multi-stage: a build stage with the
@@ -17,6 +15,14 @@
 # The base image is an argument so a deployment pipeline can substitute its own
 # (a mirrored or hardened Node 22 image); the default is the image the
 # application in front of this server builds from.
+#
+# Behind a registry mirror, a build edits nothing here. There is no `syntax`
+# parser directive, so the builder's built-in Dockerfile frontend parses this
+# file and no frontend image is pulled from Docker Hub. The build pulls one
+# image, NODE_IMAGE, and downloads packages from one registry,
+# NPM_CONFIG_REGISTRY (declared in each stage that runs `npm ci`). A build that
+# sets both reaches neither Docker Hub nor the public npm registry (README.md,
+# "Run in a container").
 ARG NODE_IMAGE=node:22-bookworm-slim
 
 # --- build -----------------------------------------------------------------
@@ -26,6 +32,12 @@ ARG NODE_IMAGE=node:22-bookworm-slim
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
+# npm's own setting, which `npm ci` reads from the environment. No default:
+# unset or empty, npm uses its default registry, as a build that passes
+# nothing always has. Set, every download goes to that address, including the
+# lockfile's `resolved` URLs, which name the public registry. It is an address,
+# never a credential: a build argument is recorded in the build's history.
+ARG NPM_CONFIG_REGISTRY
 RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
@@ -38,6 +50,8 @@ RUN npm run clean && npm run build:tsc
 FROM ${NODE_IMAGE} AS production-deps
 WORKDIR /app
 COPY package.json package-lock.json ./
+# Declared again: a stage reads only the arguments it declares (see build).
+ARG NPM_CONFIG_REGISTRY
 RUN npm ci --omit=dev
 
 # --- runtime ---------------------------------------------------------------
