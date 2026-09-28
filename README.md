@@ -114,6 +114,28 @@ curl -fsS http://127.0.0.1:8000/healthz
 
 The base image is a build argument, `NODE_IMAGE` (default `node:22-bookworm-slim`), so a deployment pipeline can substitute its own Node 22 image: `docker build --build-arg NODE_IMAGE=<your-image> .`. Nothing enters the image at build time but the source and the lockfile ([`.dockerignore`](.dockerignore) keeps `.env*`, `node_modules`, `dist`, `.git` and tests out of the build context); every setting below is read at run time from the container's environment.
 
+**Behind a registry mirror.** A build downloads from two places, and a build argument names each one, so a build host that reaches neither Docker Hub nor the public npm registry can pull through a registry mirror without editing the Dockerfile:
+
+| Build argument | Default | What it names |
+| --- | --- | --- |
+| `NODE_IMAGE` | `node:22-bookworm-slim` | The base image of every stage. |
+| `NPM_CONFIG_REGISTRY` | Unset: npm's default registry | The npm registry both `npm ci` runs download from, including the lockfile's `resolved` URLs, which name the public registry. |
+
+```bash
+docker build \
+  --build-arg NODE_IMAGE=registry.example.internal/library/node:22-bookworm-slim \
+  --build-arg NPM_CONFIG_REGISTRY=https://registry.example.internal/npm/ \
+  -t socrata-mcp-server .
+```
+
+With both set, the build pulls nothing from Docker Hub and downloads nothing from the public npm registry.
+
+- **No frontend image.** The Dockerfile has no `# syntax=` line, so the builder's built-in frontend parses it and no frontend image is pulled. On a host that already holds the base tag, that frontend builds from the stored copy rather than asking the registry again; `--pull` resolves the tag again.
+- **The registry.** `NPM_CONFIG_REGISTRY` is npm's own setting. Unset or empty, npm uses its default registry, as a build that passes nothing always has. Set, npm sends every package download there, and its update check and audit request too. The mirror must serve the npm registry API and every version in `package-lock.json`. An `https://` mirror whose certificate the base image does not trust (a private certificate authority) would need that certificate in the build, which is not covered.
+- **An address, never a credential.** A build argument is recorded: the value appears in the layer history of the build stages that declare it and in the builder's build record (`docker buildx history inspect`). A mirror that requires authentication is out of scope; a build secret is the shape that support would take.
+
+CI builds with no build argument, so the defaults stay the tested reference. [`src/__tests__/build-behind-mirror.test.ts`](src/__tests__/build-behind-mirror.test.ts) fails when the Dockerfile gains a `syntax` line, an image no build argument names, or an npm download the registry argument does not reach, or when the lockfile resolves a package outside the public registry.
+
 **Settings.** All optional.
 
 | Variable | What it does |
