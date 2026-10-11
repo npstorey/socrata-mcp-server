@@ -12,7 +12,7 @@ import {
   ColumnInfo
 } from '../utils/api.js';
 import axios from 'axios';
-import { handleSearch } from './search.js';
+import { handleSearch, MAX_RAW_ROWS } from './search.js';
 import { retrieveDocuments } from './document-retrieval.js';
 // import { McpToolHandlerContext } from '@modelcontextprotocol/sdk/types.js'; // Removed incorrect import
 
@@ -349,7 +349,7 @@ export const socrataToolZodSchema = z.object({
   // module-load time. The advertised copy is jsonParameters.properties.domain.
   domain: optionalField(z.string()).describe('The Socrata domain to query; defaults to the configured portal (DATA_PORTAL_URL) when one is set, and a call without one is refused when none is'),
   portal: optionalField(z.string()).describe('Alias for domain — the Socrata portal domain'),
-  limit: optionalField(z.union([z.coerce.number().int().positive(), z.literal('all')])).describe('Number of results to return, or "all" to fetch all available data up to configured cap'),
+  limit: optionalField(z.union([z.coerce.number().int().positive(), z.literal('all')])).describe('Number of results to return, or "all"; a query returns at most MAX_RAW_ROWS rows per call (handleSearch)'),
   offset: optionalField(z.number().int().nonnegative()).describe('Offset for pagination'),
   select: optionalField(z.string()).describe('SoQL SELECT clause'),
   where: optionalField(z.string()).describe('SoQL WHERE clause'),
@@ -399,7 +399,11 @@ const jsonParameters: any = {
     },
     limit: {
       type: 'string',
-      description: 'Number of results to return (e.g., "10", "100"), or "all" to fetch all available data'
+      // A getter so the cap it states is the one handleSearch applies (MAX_RAW_ROWS, #77).
+      get description() {
+        const cap = MAX_RAW_ROWS.toLocaleString('en-US');
+        return `Number of results to return (e.g., "10", "100"), or "all". For type "query", at most ${cap} rows per call: a larger number is reduced to ${cap}, and "all" returns up to ${cap} rows, with next_offset when more remain.`;
+      }
     },
     offset: {
       type: 'integer',

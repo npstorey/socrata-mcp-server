@@ -38,19 +38,20 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
 - `npm run clean && npm run build:tsc` — `tsc --outDir dist`, silent on success. CI runs
   those two pieces rather than `npm run build`, whose `prebuild-check` step dumps ~1,100
   lines of SDK diagnostics and produces no artifacts.
-- `npm test` — `Test Files 23 passed | 2 skipped (25)`, `Tests 226 passed | 9 skipped (235)`.
+- `npm test` — `Test Files 27 passed | 2 skipped (29)`, `Tests 270 passed | 9 skipped (279)`.
   The 9: 6 live-API integration tests behind `RUN_INTEGRATION=1` (`npm run
   test:integration`), and 3 hardcoded `.skip`s in the transport-sequence tests.
-  <!-- measured 2026-10-11 at the server-version test on branch `release/0.9.1`; the counts recorded before it (22/2/24, 223/9/232) were measured 2026-09-28 at the build-behind-mirror guard (#73) -->
+  <!-- measured 2026-10-11 with the data-path fixes (#75, #76, #77); the counts recorded before them (23/2/25, 226/9/235) were measured the same day at the server-version test on branch `release/0.9.1` -->
 - The `container-image` job (same workflow) builds the `Dockerfile`, runs the image read-only as
   a non-root user, checks `/healthz`, scans the image for `.env`/`.git`/a planted decoy value, and
   makes a live portal call through a CONNECT-only proxy from a network with no other way out
   (`scripts/connect-only-proxy.mjs`, `scripts/mcp-portal-call.mjs`). Docker locally:
   `docker build -t socrata-mcp-server . && docker run --rm -p 8000:8000 socrata-mcp-server`.
-- `npm run lint` — a pass here is **`✖ 117 problems (0 errors, 117 warnings)`** with
+- `npm run lint` — a pass here is **`✖ 116 problems (0 errors, 116 warnings)`** with
   exit 0. The warnings are pre-existing; don't clear them as a side effect of another
   change.
   <!-- measured 2026-08-22: a green lint here is not silent, and reading the ✖ line as failure invites an out-of-scope sweep -->
+  <!-- 117 -> 116 on 2026-10-11: retiring ROW_FETCH_CAP (#77) removed search.test.ts's unused import of it -->
 
 `npm run dev` runs the built `dist/` with dotenv loaded, so build first.
 
@@ -74,7 +75,9 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
   dotenv). Unset, nothing is installed. axios's own reading of these variables sends `https://`
   requests to the proxy in absolute form, no tunnel, which a CONNECT-only proxy refuses; that is
   why the module exists. README "Run in a container" has the operator-facing semantics.
-- `ROW_FETCH_CAP`, `MAX_RAW_ROWS` — optional row caps (`src/tools/search.ts`).
+- `MAX_RAW_ROWS` — optional; the most rows one `get_data` query returns (`limit`, `"all"`, raw
+  SoQL), default 10,000 (`src/tools/search.ts`). The byte bounds on one portal exchange, 32 MiB
+  in and 1 MiB out, are constants in `src/utils/api.ts`. `ROW_FETCH_CAP` is retired (#77).
 
 ## Architecture
 

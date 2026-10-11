@@ -37,6 +37,7 @@ import { McpError, ErrorCode } from './utils/mcp-errors.js';
 import { composeSkillGuidance } from './skills/compose.js';
 import { getDefaultDomain, describeConfiguredPortal, NO_DEFAULT_PORTAL } from './utils/portal-config.js';
 import { installOutboundProxy } from './utils/outbound-proxy.js';
+import { summarizeResult } from './utils/log-summary.js';
 
 // NOTE(#47): the prompts/resources request schemas were previously hand-rolled
 // here behind a comment claiming they were "not properly exported from SDK".
@@ -143,7 +144,7 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
       console.error('[Server] Handler called with request:', JSON.stringify(request, null, 2));
       try {
         const result = await handler(request, ...args);
-        console.error('[Server] Handler returned:', JSON.stringify(result, null, 2));
+        console.error('[Server] Handler returned:', summarizeResult(result));
         return result;
       } catch (error) {
         console.error('[Server] Handler error:', error);
@@ -690,7 +691,7 @@ ${apiGuideNote}
         console.error(`[Server] Parsed search params:`, JSON.stringify(parsed, null, 2));
         
         const result = await handleSearchTool(parsed);
-        console.error('[Tool] Search result:', JSON.stringify(result, null, 2));
+        console.error('[Tool] Search result:', summarizeResult(result));
         
         return {
           content: result.content,
@@ -714,7 +715,7 @@ ${apiGuideNote}
       console.error(`[Server] Parsed fetch params:`, JSON.stringify(parsed, null, 2));
       
       const result = await handleFetchTool(parsed);
-      console.error('[Tool] Fetch result:', JSON.stringify(result, null, 2));
+      console.error('[Tool] Fetch result:', summarizeResult(result));
       return {
         content: result.content,
         isError: false
@@ -742,8 +743,7 @@ ${apiGuideNote}
         }
         
         const result = await handler(parsed);
-        console.error('[Tool] Result:', JSON.stringify(result, null, 2));
-        
+
         let responseText: string;
         if (result === null || result === undefined) {
           responseText = String(result);
@@ -754,7 +754,8 @@ ${apiGuideNote}
         } else {
           responseText = JSON.stringify(result, null, 2);
         }
-        
+        console.error('[Tool] Result:', summarizeResult(result, responseText));
+
         return {
           content: [{ type: 'text', text: responseText }],
           isError: false

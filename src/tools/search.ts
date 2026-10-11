@@ -3,8 +3,16 @@ import { fetchFromSocrataApi } from '../utils/api.js';
 // Constants for Socrata API limits
 export const MAX_ROWS = 50000; // Socrata per-request hard limit
 export const DEFAULT_PREVIEW_ROWS = 1000; // Default preview size for large datasets
-export const ROW_FETCH_CAP = parseInt(process.env.ROW_FETCH_CAP || '100000', 10); // Configurable cap for "all" requests
-export const MAX_RAW_ROWS = parseInt(process.env.MAX_RAW_ROWS || '10000', 10); // Max rows for non-aggregation queries
+// The most rows one query returns (#77): the cap on `limit`, on "all", and on a non-aggregating
+// SoQL query. 10,000 is what the skill guidance tells a model never to exceed in one call. A
+// larger `limit` is reduced to it, with a `limit_note`; "all" means every matching row from
+// `offset` up to it, with `next_offset` when more remain. "all" used to page through up to
+// 100,000 rows (ROW_FETCH_CAP, now retired) into one result.
+export const MAX_RAW_ROWS = parseInt(process.env.MAX_RAW_ROWS || '10000', 10);
+
+function formatCount(n: number): string {
+  return n.toLocaleString('en-US');
+}
 
 // Detect whether a SoQL query uses aggregation (GROUP BY or aggregate functions)
 const AGGREGATION_PATTERN = /\b(GROUP\s+BY|COUNT\s*\(|SUM\s*\(|AVG\s*\(|MIN\s*\(|MAX\s*\()\b/i;
@@ -56,6 +64,7 @@ export interface SearchResponse {
   total_rows: number;
   has_more?: boolean;
   next_offset?: number;
+  limit_note?: string;
 }
 
 // Helper function to get total row count for a dataset
@@ -140,8 +149,8 @@ export async function handleSearch(params: {
 
     if (clamped) {
       (result as any).limit_note = originalLimit
-        ? `Results limited to ${MAX_RAW_ROWS.toLocaleString()} rows (requested ${originalLimit.toLocaleString()}). Use aggregation (GROUP BY) to analyze the full dataset.`
-        : `Results limited to ${MAX_RAW_ROWS.toLocaleString()} rows (safety default). Use aggregation (GROUP BY) to analyze the full dataset, or add an explicit LIMIT if you need fewer rows.`;
+        ? `Results limited to ${formatCount(MAX_RAW_ROWS)} rows (requested ${formatCount(originalLimit)}). Use aggregation (GROUP BY) to analyze the full dataset.`
+        : `Results limited to ${formatCount(MAX_RAW_ROWS)} rows (safety default). Use aggregation (GROUP BY) to analyze the full dataset, or add an explicit LIMIT if you need fewer rows.`;
     }
 
     return result;
@@ -152,10 +161,17 @@ export async function handleSearch(params: {
   
   // Determine fetch strategy
   const requestAll = limit === 'all';
-  const userLimit = typeof limit === 'number' ? limit : undefined;
-  
-  // Case 1: Small dataset or specific limit within MAX_ROWS
-  if (totalRows <= MAX_ROWS && (!requestAll && (userLimit ?? totalRows) <= MAX_ROWS)) {
+  // A limit above the cap is reduced to it, and the result says so when the cap left rows out.
+  const userLimit = typeof limit === 'number' ? Math.min(limit, MAX_RAW_ROWS) : undefined;
+  const reduced =
+    typeof limit === 'number' && limit > MAX_RAW_ROWS && totalRows - offset > MAX_RAW_ROWS
+      ? {
+          limit_note: `Results limited to ${formatCount(MAX_RAW_ROWS)} rows per call (requested ${formatCount(limit)}). Use aggregation (GROUP BY) to analyze the full dataset, or page with offset.`
+        }
+      : {};
+
+  // Case 1: Small dataset, or a specific limit, within the cap
+  if (totalRows <= MAX_ROWS && !requestAll && (userLimit ?? totalRows) <= MAX_RAW_ROWS) {
     const apiParams: Record<string, unknown> = {
       $limit: userLimit ?? totalRows,
       $offset: offset
@@ -179,17 +195,18 @@ export async function handleSearch(params: {
       data,
       is_sample: false,
       returned_rows: data.length,
-      total_rows: totalRows
+      total_rows: totalRows,
+      ...reduced
     };
   }
-  
-  // Case 2: User explicitly requested "all" data
+
+  // Case 2: User explicitly requested "all" data: every matching row from offset, up to the cap
   if (requestAll) {
     const allData: Record<string, unknown>[] = [];
     let currentOffset = offset;
-    const maxToFetch = Math.min(totalRows, ROW_FETCH_CAP);
-    
-    while (allData.length < maxToFetch && currentOffset < totalRows) {
+    const maxToFetch = Math.min(Math.max(totalRows - offset, 0), MAX_RAW_ROWS);
+
+    while (allData.length < maxToFetch) {
       const batchSize = Math.min(MAX_ROWS, maxToFetch - allData.length);
       const apiParams: Record<string, unknown> = {
         $limit: batchSize,
@@ -216,19 +233,24 @@ export async function handleSearch(params: {
       currentOffset += batch.length;
     }
     
-    const hasMore = totalRows > ROW_FETCH_CAP;
-    
+    const hasMore = currentOffset < totalRows;
+
     return {
       data: allData,
       is_sample: false,
       returned_rows: allData.length,
       total_rows: totalRows,
       has_more: hasMore,
-      next_offset: hasMore ? currentOffset : undefined
+      next_offset: hasMore ? currentOffset : undefined,
+      ...(hasMore && allData.length >= MAX_RAW_ROWS
+        ? {
+            limit_note: `"all" returns at most ${formatCount(MAX_RAW_ROWS)} rows per call; ${formatCount(totalRows - currentOffset)} more match from next_offset. Continue from next_offset, or use aggregation (GROUP BY) to analyze the full dataset.`
+          }
+        : {})
     };
   }
   
-  // Case 3: Large dataset, no explicit "all" - return preview
+  // Case 3: Large dataset, or no limit on more rows than the cap - return preview
   const previewLimit = userLimit ?? DEFAULT_PREVIEW_ROWS;
   const apiParams: Record<string, unknown> = {
     $limit: Math.min(previewLimit, MAX_ROWS),
@@ -255,6 +277,7 @@ export async function handleSearch(params: {
     returned_rows: data.length,
     total_rows: totalRows,
     has_more: offset + data.length < totalRows,
-    next_offset: offset + data.length < totalRows ? offset + data.length : undefined
+    next_offset: offset + data.length < totalRows ? offset + data.length : undefined,
+    ...reduced
   };
 }

@@ -19,6 +19,37 @@ const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 1_000; // 1 second, doubles each retry
 const RETRYABLE_STATUS_CODES = [429, 503, 502, 504];
 
+// Bounds on one portal exchange (#77). Axios leaves both unbounded by default, so an answer was
+// read into memory whatever its size: #75's redirect fetched a whole dataset (near 880 MB) and
+// the hosted server restarted. 32 MiB holds 10,000 rows of the widest dataset measured (San
+// Francisco's 311 cases at 1.77 KB a row, about 17.7 MB) with room to spare, and stops a
+// whole-dataset answer early. A request body is a SoQL query; 1 MiB is far beyond a real one.
+export const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+export const MAX_REQUEST_BYTES = 1024 * 1024;
+
+// What axios 1.9.0 rejects with when a bound is passed (lib/adapters/http.js:339-341 and
+// :556-563). Neither has an error code of its own, so the message is what identifies it.
+const RESPONSE_TOO_LARGE = /maxContentLength size of \d+ exceeded/;
+const REQUEST_TOO_LARGE = /Request body larger than maxBodyLength limit/;
+
+function mebibytes(bytes: number): string {
+  return `${bytes / (1024 * 1024)} MiB`;
+}
+
+function responseTooLarge(): McpError {
+  return new McpError(
+    ErrorCode.InvalidParams,
+    `The portal's answer to this request passed ${mebibytes(MAX_RESPONSE_BYTES)}, this server's bound on one response, so it was stopped and nothing from it is returned. Ask for less: a lower limit, fewer columns (select), a narrower where, or an aggregate (group).`
+  );
+}
+
+function requestTooLarge(): McpError {
+  return new McpError(
+    ErrorCode.InvalidParams,
+    `This request's body is larger than ${mebibytes(MAX_REQUEST_BYTES)}, this server's bound on one request, so it was not sent. Shorten the query.`
+  );
+}
+
 /**
  * Execute an axios request with timeout, and retry on transient failures.
  * Uses exponential backoff with jitter for 429/5xx responses.
@@ -28,7 +59,12 @@ async function requestWithRetry<T>(config: AxiosRequestConfig): Promise<AxiosRes
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await axios({ ...config, timeout: REQUEST_TIMEOUT_MS });
+      return await axios({
+        ...config,
+        timeout: REQUEST_TIMEOUT_MS,
+        maxContentLength: MAX_RESPONSE_BYTES,
+        maxBodyLength: MAX_REQUEST_BYTES
+      });
     } catch (e: unknown) {
       lastError = e instanceof Error ? e : new Error(String(e));
 
@@ -244,6 +280,13 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
   } catch (e: unknown) {
     if (axios.isAxiosError(e)) {
       const axiosError = e as AxiosError;
+
+      if (RESPONSE_TOO_LARGE.test(axiosError.message)) {
+        throw responseTooLarge();
+      }
+      if (REQUEST_TOO_LARGE.test(axiosError.message)) {
+        throw requestTooLarge();
+      }
 
       if (axiosError.code === 'ECONNABORTED') {
         throw new Error(
