@@ -87,7 +87,7 @@ Works with any Socrata-powered open data portal. Some popular ones:
 |------|--------|
 | New York City | `data.cityofnewyork.us` |
 | Chicago | `data.cityofchicago.org` |
-| San Francisco | `data.sfgov.org` |
+| San Francisco | `data.sf.gov` |
 | Seattle | `data.seattle.gov` |
 | Los Angeles | `data.lacity.org` |
 

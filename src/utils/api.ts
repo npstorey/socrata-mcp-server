@@ -1,4 +1,5 @@
 import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios';
+import { McpError, ErrorCode } from './mcp-errors.js';
 
 // No default portal lives here. Every request names the portal of the call it serves: callers
 // pass `baseUrl`, built from the domain their own call resolved (src/utils/portal-config.ts).
@@ -71,6 +72,36 @@ function buildSoda3Url(datasetId: string, baseUrl: string): string {
   }
   const trimmedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
   return `${trimmedBase}/api/v3/views/${datasetId}/query.json`;
+}
+
+/**
+ * The answer to a request a portal redirected and this server did not follow (#75): a refusal
+ * naming where the portal points. A portal that has moved, as San Francisco's did from
+ * data.sfgov.org to data.sf.gov, is then one call away. The new host is read from the portal's
+ * own `Location` header, never from a list in this source.
+ */
+function redirectRefusal(response: AxiosResponse, requestUrl: string): McpError {
+  const from = new URL(requestUrl).host;
+  const answered = response.statusText ? `${response.status} ${response.statusText}` : `${response.status}`;
+  const location = response.headers?.['location'];
+  let to: string | undefined;
+  if (typeof location === 'string' && location.length > 0) {
+    try {
+      to = new URL(location, requestUrl).host;
+    } catch {
+      to = undefined;
+    }
+  }
+  if (to && to !== from) {
+    return new McpError(
+      ErrorCode.InvalidParams,
+      `The portal ${from} answered this request with ${answered}, pointing to ${to}. This server does not follow a redirect on a data query; call again with domain "${to}".`
+    );
+  }
+  return new McpError(
+    ErrorCode.InvalidParams,
+    `The portal ${from} answered this request with ${answered}${location ? `, pointing to ${location}` : ''}. This server does not follow a redirect on a data query.`
+  );
 }
 
 function buildTokenHeader(): Record<string, string> {
@@ -187,6 +218,11 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
         method: 'post',
         url,
         data: payload,
+        // Never follow a redirect on a data query (#75). Axios follows through follow-redirects,
+        // which re-sends a POST answered 301 or 302 as a GET without its body, and on this
+        // endpoint that GET asks for the whole dataset. A redirect is refused instead, naming
+        // where the portal points (`redirectRefusal`). The GET paths below still follow.
+        maxRedirects: 0,
         headers: {
           ...tokenHeader,
           'Content-Type': 'application/json'
@@ -217,6 +253,9 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
 
       if (axiosError.response) {
         const status = axiosError.response.status;
+        if (status >= 300 && status < 400) {
+          throw redirectRefusal(axiosError.response, axiosError.config?.url ?? baseUrl);
+        }
         if (status === 429) {
           throw new Error(
             `Rate limited by the data portal (HTTP 429) after ${MAX_RETRIES} retries. Too many requests — try again in a minute.`
