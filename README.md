@@ -87,7 +87,7 @@ Works with any Socrata-powered open data portal. Some popular ones:
 |------|--------|
 | New York City | `data.cityofnewyork.us` |
 | Chicago | `data.cityofchicago.org` |
-| San Francisco | `data.sfgov.org` |
+| San Francisco | `data.sf.gov` |
 | Seattle | `data.seattle.gov` |
 | Los Angeles | `data.lacity.org` |
 
@@ -144,8 +144,7 @@ CI builds with no build argument, so the defaults stay the tested reference. [`s
 | `DATA_PORTAL_URL` | The default portal for a call that names none, e.g. `https://data.cityofnewyork.us`. Unset: no default, and such a call is refused per call (see [Environment variables](#environment-variables)). An instance behind a single-portal deployment of the [civic-ai-tools website](https://github.com/npstorey/civic-ai-tools-website) sets this to the same portal as the app's `SITE_DEFAULT_PORTAL`. |
 | `SOCRATA_APP_TOKEN` | Sent as `X-App-Token` on every portal request, for the portal's higher rate limit. Without it, portals apply their anonymous throttle. |
 | `SKILL_POSTURE` | Skill-guidance posture overlay. Leave unset for a generic deployment. |
-| `ROW_FETCH_CAP` | Most rows a single "all rows" request will fetch across pages. Default 100000. |
-| `MAX_RAW_ROWS` | Most rows a non-aggregating query returns. Default 10000. |
+| `MAX_RAW_ROWS` | Most rows one `get_data` query returns: the cap on `limit` (a larger one is reduced to it, with a `limit_note`), on `"all"` (every matching row up to it, with `next_offset` when more remain), and on a non-aggregating SoQL query. Default 10000. Whatever it is set to, a portal answer over 32 MiB, or a request body over 1 MiB, is refused. |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | The egress proxy for portal calls, below. |
 
 **This server has no authentication.** Anything that can reach the port can query portals through it, so it belongs on a private network: an ECS service or a compose stack the application reaches by an internal name, not a public listener. The application in front of it then names this server's host in **its own** `NO_PROXY`, so that its calls to the server stay inside the network rather than being sent to the egress proxy; the server needs no such entry for itself. `/healthz` answers 200 and is the path to give the orchestrator's health check (an ECS task definition's `healthCheck`, Render's `healthCheckPath`); the image declares no `HEALTHCHECK` of its own, because the slim image has no `curl` and a probe would cost a Node process every interval. The server writes no file, so it runs under a read-only root filesystem (`docker run --read-only`); CI measures that, the non-root user and `/healthz` on every change, in the `container-image` job.

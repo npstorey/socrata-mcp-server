@@ -37,6 +37,7 @@ import { fetchFromSocrataApi } from '../utils/api.js';
 import { documentCache } from '../utils/cache.js';
 import { createServer } from '../index.js';
 import { handleSearchTool, handleFetchTool, handleSocrataTool } from '../tools/socrata-tools.js';
+import { misclassifyingWordsIn } from './misclassifying-words.js';
 
 const mockedFetch = vi.mocked(fetchFromSocrataApi);
 const mockedAxiosGet = vi.mocked(axios.get);
@@ -48,21 +49,6 @@ const CONFIGURED_HOST = 'data.cityofchicago.org';
 const OLD_FALLBACK_HOST = 'data.cityofnewyork.us';
 /** A portal a call names for itself. */
 const NAMED_HOST = 'data.portal-named-in-the-call.example';
-
-/**
- * Words the website's failure classifier reads as "the source was unreachable, slow or
- * rate-limited" (civic-ai-tools-website `src/lib/streaming.ts` `classifyStreamError`, at
- * ea1164c), plus `parse`, which its client's SSE branch (`src/lib/mcp/client.ts`) treats as a
- * parse failure and replaces. A refusal is none of those things, so its text carries none of
- * them. The website's own classifier is the authority; this copy is a local early warning.
- */
-const MISCLASSIFYING_WORDS = [
-  'unavailable', 'mcp server', 'mcp tool', 'initialization failed', 'econnrefused', 'enotfound',
-  'fetch failed', '502', '503', '504', 'failed to connect', 'no response body', 'network',
-  'connection', 'timed out', 'timeout', 'did not respond within', 'rate limit', '429',
-  'socrata_mcp_url', 'no model api key', 'missing credentials', 'invalid api key',
-  'incorrect api key', 'parse'
-];
 
 type ToolName = 'get_data' | 'fetch' | 'search';
 type Shape = { label: string; tool: ToolName; args: Record<string, unknown>; nextStep: string };
@@ -216,8 +202,7 @@ describe('tools/call through the real handlers', () => {
         const message = (await rpc.callTool(shape)).error?.message ?? '';
         expect(message).toContain('names no portal');
         expect(message).toContain(shape.nextStep);
-        const misleading = MISCLASSIFYING_WORDS.filter((word) => message.toLowerCase().includes(word));
-        expect(misleading, message).toEqual([]);
+        expect(misclassifyingWordsIn(message), message).toEqual([]);
       });
     }
 

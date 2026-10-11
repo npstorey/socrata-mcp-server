@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { handleSearch, getRowCount, MAX_ROWS, DEFAULT_PREVIEW_ROWS, ROW_FETCH_CAP } from '../tools/search.js';
+import { handleSearch, getRowCount, MAX_ROWS, DEFAULT_PREVIEW_ROWS, MAX_RAW_ROWS } from '../tools/search.js';
 import * as api from '../utils/api.js';
 
 // Mock the API module
@@ -8,8 +8,6 @@ vi.mock('../utils/api.js');
 describe('Search Tool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Reset env var for tests
-    process.env.ROW_FETCH_CAP = '100000';
   });
 
   describe('getRowCount', () => {
@@ -97,51 +95,42 @@ describe('Search Tool', () => {
       );
     });
 
-    test('paginates when user requests all data within cap', async () => {
+    test('"all" on a dataset within the cap returns every row, in one request', async () => {
       const mockFetch = vi.mocked(api.fetchFromSocrataApi);
-      const totalRows = 60000;
-      
-      // First call: count
-      mockFetch.mockResolvedValueOnce([{ count: totalRows.toString() }]);
-      
-      // Two paginated calls (50k + 10k)
-      const firstBatch = Array(MAX_ROWS).fill({}).map((_, i) => ({ id: i }));
-      const secondBatch = Array(10000).fill({}).map((_, i) => ({ id: i + MAX_ROWS }));
-      
-      mockFetch.mockResolvedValueOnce(firstBatch);
-      mockFetch.mockResolvedValueOnce(secondBatch);
+      const rows = Array(600).fill({}).map((_, i) => ({ id: i }));
+
+      mockFetch.mockResolvedValueOnce([{ count: '600' }]);
+      mockFetch.mockResolvedValueOnce(rows);
 
       const result = await handleSearch({
-        datasetId: 'paginated-dataset',
+        datasetId: 'all-small-dataset',
         domain: 'data.test.gov',
         limit: 'all'
       });
 
       expect(result).toEqual({
-        data: [...firstBatch, ...secondBatch],
+        data: rows,
         is_sample: false,
-        returned_rows: 60000,
-        total_rows: 60000,
-        has_more: false
+        returned_rows: 600,
+        total_rows: 600,
+        has_more: false,
+        next_offset: undefined
       });
-
-      // Count + 2 pages
-      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        '/resource/all-small-dataset.json',
+        { $limit: 600, $offset: 0 },
+        'https://data.test.gov'
+      );
     });
 
-    test('respects ROW_FETCH_CAP when dataset exceeds cap', async () => {
+    test('"all" past the cap returns the first 10,000 rows, with next_offset and a limit_note (#77)', async () => {
       const mockFetch = vi.mocked(api.fetchFromSocrataApi);
       const totalRows = 150000;
-      
-      // First call: count
+      const firstPage = Array(MAX_RAW_ROWS).fill({}).map((_, i) => ({ id: i }));
+
       mockFetch.mockResolvedValueOnce([{ count: totalRows.toString() }]);
-      
-      // Two full batches up to cap (50k + 50k = 100k)
-      const firstBatch = Array(MAX_ROWS).fill({}).map((_, i) => ({ id: i }));
-      const secondBatch = Array(MAX_ROWS).fill({}).map((_, i) => ({ id: i + MAX_ROWS }));
-      
-      mockFetch.mockResolvedValueOnce(firstBatch);
-      mockFetch.mockResolvedValueOnce(secondBatch);
+      mockFetch.mockResolvedValueOnce(firstPage);
 
       const result = await handleSearch({
         datasetId: 'huge-all-dataset',
@@ -149,17 +138,134 @@ describe('Search Tool', () => {
         limit: 'all'
       });
 
+      expect(MAX_RAW_ROWS).toBe(10000);
       expect(result).toEqual({
-        data: [...firstBatch, ...secondBatch],
+        data: firstPage,
         is_sample: false,
-        returned_rows: 100000,
+        returned_rows: 10000,
         total_rows: 150000,
         has_more: true,
-        next_offset: 100000
+        next_offset: 10000,
+        limit_note: '"all" returns at most 10,000 rows per call; 140,000 more match from next_offset. Continue from next_offset, or use aggregation (GROUP BY) to analyze the full dataset.'
+      });
+      // Count + one page of 10,000: it used to page through 100,000 rows in 50,000-row requests.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        '/resource/huge-all-dataset.json',
+        { $limit: 10000, $offset: 0 },
+        'https://data.test.gov'
+      );
+    });
+
+    test('"all" from an offset fetches only what remains', async () => {
+      const mockFetch = vi.mocked(api.fetchFromSocrataApi);
+      const rest = Array(5000).fill({}).map((_, i) => ({ id: 20000 + i }));
+
+      mockFetch.mockResolvedValueOnce([{ count: '25000' }]);
+      mockFetch.mockResolvedValueOnce(rest);
+
+      const result = await handleSearch({
+        datasetId: 'all-offset-dataset',
+        domain: 'data.test.gov',
+        limit: 'all',
+        offset: 20000
       });
 
-      // Should stop at cap
-      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(result).toMatchObject({ returned_rows: 5000, total_rows: 25000, has_more: false });
+      expect(result.limit_note).toBeUndefined();
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        '/resource/all-offset-dataset.json',
+        { $limit: 5000, $offset: 20000 },
+        'https://data.test.gov'
+      );
+    });
+
+    test('a limit past the cap is reduced to it, with a limit_note (the evaluation\'s limit 32016)', async () => {
+      const mockFetch = vi.mocked(api.fetchFromSocrataApi);
+      const rows = Array(MAX_RAW_ROWS).fill({}).map((_, i) => ({ id: i }));
+
+      mockFetch.mockResolvedValueOnce([{ count: '40000' }]);
+      mockFetch.mockResolvedValueOnce(rows);
+
+      const result = await handleSearch({
+        datasetId: 'xzkq-xp2w',
+        domain: 'data.test.gov',
+        limit: 32016
+      });
+
+      expect(result).toEqual({
+        data: rows,
+        is_sample: false,
+        returned_rows: 10000,
+        total_rows: 40000,
+        limit_note: 'Results limited to 10,000 rows per call (requested 32,016). Use aggregation (GROUP BY) to analyze the full dataset, or page with offset.'
+      });
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        '/resource/xzkq-xp2w.json',
+        { $limit: 10000, $offset: 0 },
+        'https://data.test.gov'
+      );
+    });
+
+    test('a limit past the cap on a dataset smaller than the cap carries no limit_note: nothing was left out', async () => {
+      const mockFetch = vi.mocked(api.fetchFromSocrataApi);
+      const rows = Array(500).fill({}).map((_, i) => ({ id: i }));
+
+      mockFetch.mockResolvedValueOnce([{ count: '500' }]);
+      mockFetch.mockResolvedValueOnce(rows);
+
+      const result = await handleSearch({
+        datasetId: 'small-big-limit-dataset',
+        domain: 'data.test.gov',
+        limit: 20000
+      });
+
+      expect(result).toEqual({ data: rows, is_sample: false, returned_rows: 500, total_rows: 500 });
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        '/resource/small-big-limit-dataset.json',
+        { $limit: 10000, $offset: 0 },
+        'https://data.test.gov'
+      );
+    });
+
+    test('a limit past the cap on a large dataset is reduced in the preview too', async () => {
+      const mockFetch = vi.mocked(api.fetchFromSocrataApi);
+
+      mockFetch.mockResolvedValueOnce([{ count: '120000' }]);
+      mockFetch.mockResolvedValueOnce(Array(MAX_RAW_ROWS).fill({}).map((_, i) => ({ id: i })));
+
+      const result = await handleSearch({
+        datasetId: 'large-limit-dataset',
+        domain: 'data.test.gov',
+        limit: 20000
+      });
+
+      expect(result).toMatchObject({ is_sample: true, returned_rows: 10000, has_more: true, next_offset: 10000 });
+      expect(result.limit_note).toContain('requested 20,000');
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        '/resource/large-limit-dataset.json',
+        { $limit: 10000, $offset: 0 },
+        'https://data.test.gov'
+      );
+    });
+
+    test('no limit on more rows than the cap returns a preview, not every row', async () => {
+      const mockFetch = vi.mocked(api.fetchFromSocrataApi);
+
+      mockFetch.mockResolvedValueOnce([{ count: '30000' }]);
+      mockFetch.mockResolvedValueOnce(Array(DEFAULT_PREVIEW_ROWS).fill({}).map((_, i) => ({ id: i })));
+
+      const result = await handleSearch({
+        datasetId: 'mid-dataset',
+        domain: 'data.test.gov'
+      });
+
+      expect(result).toMatchObject({ is_sample: true, returned_rows: DEFAULT_PREVIEW_ROWS, total_rows: 30000, has_more: true });
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        '/resource/mid-dataset.json',
+        { $limit: DEFAULT_PREVIEW_ROWS, $offset: 0 },
+        'https://data.test.gov'
+      );
     });
 
     test('handles full SoQL query', async () => {
@@ -344,30 +450,30 @@ describe('Search Tool', () => {
       });
     });
 
-    test('respects custom ROW_FETCH_CAP from environment', async () => {
-      process.env.ROW_FETCH_CAP = '25000';
-      
-      // Re-import to pick up new env var
-      vi.resetModules();
-      const { handleSearch: handleSearchWithNewCap } = await import('../tools/search.js');
-      
-      const mockFetch = vi.mocked(api.fetchFromSocrataApi);
-      
-      // First call: count shows 30k rows
-      mockFetch.mockResolvedValueOnce([{ count: '30000' }]);
-      // Second call: first batch (will be limited to 25k due to cap)
-      mockFetch.mockResolvedValueOnce(Array(25000).fill({}).map((_, i) => ({ id: i })));
+    test('respects a custom MAX_RAW_ROWS from the environment, for "all" and for limit', async () => {
+      process.env.MAX_RAW_ROWS = '2500';
+      try {
+        // Re-import to pick up new env var
+        vi.resetModules();
+        const { handleSearch: handleSearchWithNewCap } = await import('../tools/search.js');
 
-      const result = await handleSearchWithNewCap({
-        datasetId: 'custom-cap-dataset',
-        domain: 'data.test.gov',
-        limit: 'all'
-      });
+        const mockFetch = vi.mocked(api.fetchFromSocrataApi);
 
-      expect(result.returned_rows).toBe(25000);
-      expect(result.total_rows).toBe(30000);
-      expect(result.has_more).toBe(true);
-      expect(result.next_offset).toBe(25000);
+        mockFetch.mockResolvedValueOnce([{ count: '30000' }]);
+        mockFetch.mockResolvedValueOnce(Array(2500).fill({}).map((_, i) => ({ id: i })));
+        const all = await handleSearchWithNewCap({ datasetId: 'custom-cap-dataset', domain: 'data.test.gov', limit: 'all' });
+        expect(all).toMatchObject({ returned_rows: 2500, total_rows: 30000, has_more: true, next_offset: 2500 });
+        expect(mockFetch).toHaveBeenLastCalledWith('/resource/custom-cap-dataset.json', { $limit: 2500, $offset: 0 }, 'https://data.test.gov');
+
+        mockFetch.mockResolvedValueOnce([{ count: '30000' }]);
+        mockFetch.mockResolvedValueOnce(Array(2500).fill({}).map((_, i) => ({ id: i })));
+        const limited = await handleSearchWithNewCap({ datasetId: 'custom-cap-dataset', domain: 'data.test.gov', limit: 4000 });
+        expect(limited.limit_note).toContain('Results limited to 2,500 rows per call (requested 4,000)');
+        expect(mockFetch).toHaveBeenLastCalledWith('/resource/custom-cap-dataset.json', { $limit: 2500, $offset: 0 }, 'https://data.test.gov');
+      } finally {
+        delete process.env.MAX_RAW_ROWS;
+        vi.resetModules();
+      }
     });
   });
 });

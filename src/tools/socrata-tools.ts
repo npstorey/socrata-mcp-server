@@ -12,7 +12,7 @@ import {
   ColumnInfo
 } from '../utils/api.js';
 import axios from 'axios';
-import { handleSearch } from './search.js';
+import { handleSearch, MAX_RAW_ROWS } from './search.js';
 import { retrieveDocuments } from './document-retrieval.js';
 // import { McpToolHandlerContext } from '@modelcontextprotocol/sdk/types.js'; // Removed incorrect import
 
@@ -324,28 +324,40 @@ export const fetchToolZodSchema = z.object({
   id: z.string().min(1, 'Document ID is required').describe('Identifier returned from the search tool')
 });
 
+// A blank string in an optional field reads as absent (#76). Some models fill every optional
+// argument they are shown and leave the ones they do not need as "" (measured 2026-10-11:
+// gpt-5.4 and gpt-6.1-sol, on every call). The advertised schema sets no minimum length, so ""
+// is a value a client was allowed to send; this schema used to refuse it. Whitespace counts as
+// blank. A value that is present is still checked by the field's own schema.
+const blankAsAbsent = (value: unknown) =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
+
+function optionalField<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess(blankAsAbsent, schema.optional());
+}
+
 // 1️⃣ Zod definition for the Socrata tool's parameters.
 // This is used by the MCP SDK to parse/validate parameters from the client.
 export const socrataToolZodSchema = z.object({
   type: z.enum(['catalog','metadata','query','metrics'])
          .describe('Operation to perform'),
-  query: z.string().min(1).optional()
+  query: optionalField(z.string())
          .describe('General search phrase OR a full SoQL query string. If this is a full SoQL query (e.g., starts with SELECT), other SoQL parameters like select, where, q might be overridden or ignored by the handler in favor of the full SoQL query. If it\'s a search phrase, it will likely be used for a full-text search ($q parameter to Socrata).'),
   // Optional parameters - these should also be in jsonParameters if they are to be exposed to the client
   // No portal example here: this schema is used only to parse incoming
   // arguments, never advertised, so it must not carry a domain snapshotted at
   // module-load time. The advertised copy is jsonParameters.properties.domain.
-  domain: z.string().optional().describe('The Socrata domain to query; defaults to the configured portal (DATA_PORTAL_URL) when one is set, and a call without one is refused when none is'),
-  portal: z.string().optional().describe('Alias for domain — the Socrata portal domain'),
-  limit: z.union([z.coerce.number().int().positive(), z.literal('all')]).optional().describe('Number of results to return, or "all" to fetch all available data up to configured cap'),
-  offset: z.number().int().nonnegative().optional().describe('Offset for pagination'),
-  select: z.string().optional().describe('SoQL SELECT clause'),
-  where: z.string().optional().describe('SoQL WHERE clause'),
-  order: z.string().optional().describe('SoQL ORDER BY clause'),
-  group: z.string().optional().describe('SoQL GROUP BY clause'),
-  having: z.string().optional().describe('SoQL HAVING clause'),
-  dataset_id: z.string().optional().describe('Dataset ID (for metadata, metrics, data-access)'),
-  q: z.string().optional().describe('Full-text search query within the dataset (used in data access)')
+  domain: optionalField(z.string()).describe('The Socrata domain to query; defaults to the configured portal (DATA_PORTAL_URL) when one is set, and a call without one is refused when none is'),
+  portal: optionalField(z.string()).describe('Alias for domain — the Socrata portal domain'),
+  limit: optionalField(z.union([z.coerce.number().int().positive(), z.literal('all')])).describe('Number of results to return, or "all"; a query returns at most MAX_RAW_ROWS rows per call (handleSearch)'),
+  offset: optionalField(z.number().int().nonnegative()).describe('Offset for pagination'),
+  select: optionalField(z.string()).describe('SoQL SELECT clause'),
+  where: optionalField(z.string()).describe('SoQL WHERE clause'),
+  order: optionalField(z.string()).describe('SoQL ORDER BY clause'),
+  group: optionalField(z.string()).describe('SoQL GROUP BY clause'),
+  having: optionalField(z.string()).describe('SoQL HAVING clause'),
+  dataset_id: optionalField(z.string()).describe('Dataset ID (for metadata, metrics, data-access)'),
+  q: optionalField(z.string()).describe('Full-text search query within the dataset (used in data access)')
 });
 
 // Infer the type from the Zod schema for use in the handler
@@ -387,7 +399,11 @@ const jsonParameters: any = {
     },
     limit: {
       type: 'string',
-      description: 'Number of results to return (e.g., "10", "100"), or "all" to fetch all available data'
+      // A getter so the cap it states is the one handleSearch applies (MAX_RAW_ROWS, #77).
+      get description() {
+        const cap = MAX_RAW_ROWS.toLocaleString('en-US');
+        return `Number of results to return (e.g., "10", "100"), or "all". For type "query", at most ${cap} rows per call: a larger number is reduced to ${cap}, and "all" returns up to ${cap} rows, with next_offset when more remain.`;
+      }
     },
     offset: {
       type: 'integer',

@@ -1,4 +1,5 @@
 import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios';
+import { McpError, ErrorCode } from './mcp-errors.js';
 
 // No default portal lives here. Every request names the portal of the call it serves: callers
 // pass `baseUrl`, built from the domain their own call resolved (src/utils/portal-config.ts).
@@ -18,6 +19,37 @@ const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 1_000; // 1 second, doubles each retry
 const RETRYABLE_STATUS_CODES = [429, 503, 502, 504];
 
+// Bounds on one portal exchange (#77). Axios leaves both unbounded by default, so an answer was
+// read into memory whatever its size: #75's redirect fetched a whole dataset (near 880 MB) and
+// the hosted server restarted. 32 MiB holds 10,000 rows of the widest dataset measured (San
+// Francisco's 311 cases at 1.77 KB a row, about 17.7 MB) with room to spare, and stops a
+// whole-dataset answer early. A request body is a SoQL query; 1 MiB is far beyond a real one.
+export const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+export const MAX_REQUEST_BYTES = 1024 * 1024;
+
+// What axios 1.9.0 rejects with when a bound is passed (lib/adapters/http.js:339-341 and
+// :556-563). Neither has an error code of its own, so the message is what identifies it.
+const RESPONSE_TOO_LARGE = /maxContentLength size of \d+ exceeded/;
+const REQUEST_TOO_LARGE = /Request body larger than maxBodyLength limit/;
+
+function mebibytes(bytes: number): string {
+  return `${bytes / (1024 * 1024)} MiB`;
+}
+
+function responseTooLarge(): McpError {
+  return new McpError(
+    ErrorCode.InvalidParams,
+    `The portal's answer to this request passed ${mebibytes(MAX_RESPONSE_BYTES)}, this server's bound on one response, so it was stopped and nothing from it is returned. Ask for less: a lower limit, fewer columns (select), a narrower where, or an aggregate (group).`
+  );
+}
+
+function requestTooLarge(): McpError {
+  return new McpError(
+    ErrorCode.InvalidParams,
+    `This request's body is larger than ${mebibytes(MAX_REQUEST_BYTES)}, this server's bound on one request, so it was not sent. Shorten the query.`
+  );
+}
+
 /**
  * Execute an axios request with timeout, and retry on transient failures.
  * Uses exponential backoff with jitter for 429/5xx responses.
@@ -27,7 +59,12 @@ async function requestWithRetry<T>(config: AxiosRequestConfig): Promise<AxiosRes
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await axios({ ...config, timeout: REQUEST_TIMEOUT_MS });
+      return await axios({
+        ...config,
+        timeout: REQUEST_TIMEOUT_MS,
+        maxContentLength: MAX_RESPONSE_BYTES,
+        maxBodyLength: MAX_REQUEST_BYTES
+      });
     } catch (e: unknown) {
       lastError = e instanceof Error ? e : new Error(String(e));
 
@@ -71,6 +108,36 @@ function buildSoda3Url(datasetId: string, baseUrl: string): string {
   }
   const trimmedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
   return `${trimmedBase}/api/v3/views/${datasetId}/query.json`;
+}
+
+/**
+ * The answer to a request a portal redirected and this server did not follow (#75): a refusal
+ * naming where the portal points. A portal that has moved, as San Francisco's did from
+ * data.sfgov.org to data.sf.gov, is then one call away. The new host is read from the portal's
+ * own `Location` header, never from a list in this source.
+ */
+function redirectRefusal(response: AxiosResponse, requestUrl: string): McpError {
+  const from = new URL(requestUrl).host;
+  const answered = response.statusText ? `${response.status} ${response.statusText}` : `${response.status}`;
+  const location = response.headers?.['location'];
+  let to: string | undefined;
+  if (typeof location === 'string' && location.length > 0) {
+    try {
+      to = new URL(location, requestUrl).host;
+    } catch {
+      to = undefined;
+    }
+  }
+  if (to && to !== from) {
+    return new McpError(
+      ErrorCode.InvalidParams,
+      `The portal ${from} answered this request with ${answered}, pointing to ${to}. This server does not follow a redirect on a data query; call again with domain "${to}".`
+    );
+  }
+  return new McpError(
+    ErrorCode.InvalidParams,
+    `The portal ${from} answered this request with ${answered}${location ? `, pointing to ${location}` : ''}. This server does not follow a redirect on a data query.`
+  );
 }
 
 function buildTokenHeader(): Record<string, string> {
@@ -187,6 +254,11 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
         method: 'post',
         url,
         data: payload,
+        // Never follow a redirect on a data query (#75). Axios follows through follow-redirects,
+        // which re-sends a POST answered 301 or 302 as a GET without its body, and on this
+        // endpoint that GET asks for the whole dataset. A redirect is refused instead, naming
+        // where the portal points (`redirectRefusal`). The GET paths below still follow.
+        maxRedirects: 0,
         headers: {
           ...tokenHeader,
           'Content-Type': 'application/json'
@@ -209,6 +281,13 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
     if (axios.isAxiosError(e)) {
       const axiosError = e as AxiosError;
 
+      if (RESPONSE_TOO_LARGE.test(axiosError.message)) {
+        throw responseTooLarge();
+      }
+      if (REQUEST_TOO_LARGE.test(axiosError.message)) {
+        throw requestTooLarge();
+      }
+
       if (axiosError.code === 'ECONNABORTED') {
         throw new Error(
           `API request timed out after ${REQUEST_TIMEOUT_MS / 1000}s (retried ${MAX_RETRIES} times). The data portal may be under heavy load.`
@@ -217,6 +296,9 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
 
       if (axiosError.response) {
         const status = axiosError.response.status;
+        if (status >= 300 && status < 400) {
+          throw redirectRefusal(axiosError.response, axiosError.config?.url ?? baseUrl);
+        }
         if (status === 429) {
           throw new Error(
             `Rate limited by the data portal (HTTP 429) after ${MAX_RETRIES} retries. Too many requests — try again in a minute.`
