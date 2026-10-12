@@ -13,7 +13,7 @@ import {
 } from '../utils/api.js';
 import axios from 'axios';
 import { allowanceMs, timeBounds } from '../utils/call-budget.js';
-import { handleSearch, MAX_RAW_ROWS } from './search.js';
+import { handleSearch, maxRawRows } from './search.js';
 import { retrieveDocuments } from './document-retrieval.js';
 // import { McpToolHandlerContext } from '@modelcontextprotocol/sdk/types.js'; // Removed incorrect import
 
@@ -403,7 +403,7 @@ const jsonParameters: any = {
       type: 'string',
       // A getter so the cap it states is the one handleSearch applies (MAX_RAW_ROWS, #77).
       get description() {
-        const cap = MAX_RAW_ROWS.toLocaleString('en-US');
+        const cap = maxRawRows().toLocaleString('en-US');
         return `Number of results to return (e.g., "10", "100"), or "all". For type "query", at most ${cap} rows per call: a larger number is reduced to ${cap}, and "all" returns up to ${cap} rows, with next_offset when more remain.`;
       }
     },

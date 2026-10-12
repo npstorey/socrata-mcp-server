@@ -7,8 +7,12 @@ export const DEFAULT_PREVIEW_ROWS = 1000; // Default preview size for large data
 // SoQL query. 10,000 is what the skill guidance tells a model never to exceed in one call. A
 // larger `limit` is reduced to it, with a `limit_note`; "all" means every matching row from
 // `offset` up to it, with `next_offset` when more remain. "all" used to page through up to
-// 100,000 rows (ROW_FETCH_CAP, now retired) into one result.
-export const MAX_RAW_ROWS = parseInt(process.env.MAX_RAW_ROWS || '10000', 10);
+// 100,000 rows (ROW_FETCH_CAP, now retired) into one result. Read per call, not at import:
+// src/index.ts loads .env (dotenv.config()) after every module has been imported, so a value read
+// at import missed one set in .env.
+export function maxRawRows(): number {
+  return parseInt(process.env.MAX_RAW_ROWS || '10000', 10);
+}
 
 function formatCount(n: number): string {
   return n.toLocaleString('en-US');
@@ -35,9 +39,9 @@ function setSoqlLimit(soql: string, limit: number): string {
   return `${soql.trimEnd()} LIMIT ${limit}`;
 }
 
-// Clamp a raw (non-aggregation) SoQL query's LIMIT to MAX_RAW_ROWS.
+// Clamp a raw (non-aggregation) SoQL query's LIMIT to the cap (maxRawRows).
 // Returns { query, clamped } where clamped is true if the limit was reduced or added.
-function clampRawQueryLimit(soql: string): { query: string; clamped: boolean; originalLimit?: number } {
+function clampRawQueryLimit(soql: string, cap: number): { query: string; clamped: boolean; originalLimit?: number } {
   if (isAggregationQuery(soql)) {
     return { query: soql, clamped: false };
   }
@@ -46,11 +50,11 @@ function clampRawQueryLimit(soql: string): { query: string; clamped: boolean; or
 
   if (existingLimit === undefined) {
     // No LIMIT on a raw query — add safety default
-    return { query: setSoqlLimit(soql, MAX_RAW_ROWS), clamped: true };
+    return { query: setSoqlLimit(soql, cap), clamped: true };
   }
 
-  if (existingLimit > MAX_RAW_ROWS) {
-    return { query: setSoqlLimit(soql, MAX_RAW_ROWS), clamped: true, originalLimit: existingLimit };
+  if (existingLimit > cap) {
+    return { query: setSoqlLimit(soql, cap), clamped: true, originalLimit: existingLimit };
   }
 
   return { query: soql, clamped: false };
@@ -121,12 +125,13 @@ export async function handleSearch(params: {
     having,
     q
   } = params;
+  const MAX_RAW_ROWS = maxRawRows();
 
   // If a full SoQL query is provided, we can't easily determine row count
   // So we'll fetch with the query and check results
   if (soqlQuery && soqlQuery.trim().length > 0) {
     // Clamp raw (non-aggregation) queries to MAX_RAW_ROWS
-    const { query: clampedQuery, clamped, originalLimit } = clampRawQueryLimit(soqlQuery);
+    const { query: clampedQuery, clamped, originalLimit } = clampRawQueryLimit(soqlQuery, MAX_RAW_ROWS);
 
     const apiParams: Record<string, unknown> = {
       $query: clampedQuery
