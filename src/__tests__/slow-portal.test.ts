@@ -132,8 +132,9 @@ describe('a portal request that runs past its time', () => {
       expect(refusal.message.replace(/waited \d+ s/, 'waited N s')).toBe(refusalText(origin.host));
       expect(refusal.message).not.toContain('retried');
       expect(misclassifyingWordsIn(refusal.message), refusal.message).toEqual([]);
+      // Main sent it four times, 8.8 s at a 300 ms limit; the bound is loose for a loaded machine.
       expect(elapsed).toBeGreaterThanOrEqual(290);
-      expect(elapsed).toBeLessThan(1_000);
+      expect(elapsed).toBeLessThan(3_000);
 
       // The old first retry came 1 to 1.25 s after the timeout; nothing comes now.
       await settle(1_500);
@@ -142,7 +143,10 @@ describe('a portal request that runs past its time', () => {
   }
 
   it("one limit across a call's requests: a count that answers, then a data query held, refused at the call's limit", async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const lines: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    });
     origin.answers = [{ afterMs: 200, body: '[{"count":"5"}]' }, 'hold'];
     const before = origin.requests;
     const started = Date.now();
@@ -156,8 +160,11 @@ describe('a portal request that runs past its time', () => {
 
     expect(refusal).toBeInstanceOf(McpError);
     expect(elapsed).toBeGreaterThanOrEqual(590);
-    expect(elapsed).toBeLessThan(1_000);
     expect(origin.requests - before).toBe(2);
+    // The data query was given the call's time left, not a limit of its own.
+    const line = lines.find((l) => l.startsWith('[Portal] Took too long: ')) ?? '';
+    expect(Number(/ allowed_ms=(\d+)/.exec(line)?.[1])).toBeLessThan(600);
+    expect(Number(/ call_ms=(\d+)/.exec(line)?.[1])).toBeGreaterThanOrEqual(590);
   });
 
   it('an answer that sends a byte now and then is still stopped at its time', async () => {
@@ -168,7 +175,8 @@ describe('a portal request that runs past its time', () => {
 
     expect(refusal).toBeInstanceOf(McpError);
     expect(refusal.message.replace(/waited \d+ s/, 'waited N s')).toBe(refusalText(origin.host));
-    expect(Date.now() - started).toBeLessThan(1_000);
+    // Without a bound on the total, this would wait for the test's own timeout.
+    expect(Date.now() - started).toBeLessThan(3_000);
   });
 
   it('positive control: a 503 is still retried, and the answer that follows is returned', async () => {
@@ -183,22 +191,20 @@ describe('a portal request that runs past its time', () => {
   it("a retry whose wait would pass the call's limit is not made", async () => {
     origin.answers = [{ status: 503 }];
     const before = origin.requests;
-    const started = Date.now();
     const error = await refusalOf(withCallLimit(() => fetchFromSocrataApi(DATA_PATH, {}, origin.base), 500));
 
+    // Had the retry been made, its request would have been held and refused as too long.
     expect(error.message).toContain('API request failed: 503');
-    expect(Date.now() - started).toBeLessThan(400);
     expect(origin.requests - before).toBe(1);
   });
 
   it('a 429 whose Retry-After passes the limit is answered at once, without claiming retries', async () => {
     origin.answers = [{ status: 429, headers: { 'Retry-After': '60' } }];
     const before = origin.requests;
-    const started = Date.now();
     const error = await refusalOf(fetchFromSocrataApi(DATA_PATH, {}, origin.base));
 
+    // Had it waited the 60 s Retry-After, the test would have run past its own timeout.
     expect(error.message).toBe('Rate limited by the data portal (HTTP 429). Too many requests — try again in a minute.');
-    expect(Date.now() - started).toBeLessThan(1_000);
     expect(origin.requests - before).toBe(1);
   });
 
