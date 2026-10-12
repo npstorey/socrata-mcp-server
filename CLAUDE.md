@@ -38,10 +38,10 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
 - `npm run clean && npm run build:tsc` — `tsc --outDir dist`, silent on success. CI runs
   those two pieces rather than `npm run build`, whose `prebuild-check` step dumps ~1,100
   lines of SDK diagnostics and produces no artifacts.
-- `npm test` — `Test Files 29 passed | 2 skipped (31)`, `Tests 287 passed | 9 skipped (296)`.
+- `npm test` — `Test Files 30 passed | 2 skipped (32)`, `Tests 291 passed | 9 skipped (300)`.
   The 9: 6 live-API integration tests behind `RUN_INTEGRATION=1` (`npm run
   test:integration`), and 3 hardcoded `.skip`s in the transport-sequence tests.
-  <!-- measured 2026-10-12 with the per-call time limit (#79); before it, 27/2/29 and 270/9/279, measured 2026-10-11 with the data-path fixes (#75, #76, #77) -->
+  <!-- measured 2026-10-12 at release 0.9.2, with settings read after dotenv; before it 29/2/31 and 287/9/296 with the per-call time limit (#79), and 27/2/29 and 270/9/279 on 2026-10-11 with the data-path fixes (#75, #76, #77) -->
 - The `container-image` job (same workflow) builds the `Dockerfile`, runs the image read-only as
   a non-root user, checks `/healthz`, scans the image for `.env`/`.git`/a planted decoy value, and
   makes a live portal call through a CONNECT-only proxy from a network with no other way out
@@ -76,8 +76,9 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
   requests to the proxy in absolute form, no tunnel, which a CONNECT-only proxy refuses; that is
   why the module exists. README "Run in a container" has the operator-facing semantics.
 - `MAX_RAW_ROWS` — optional; the most rows one `get_data` query returns (`limit`, `"all"`, raw
-  SoQL), default 10,000 (`src/tools/search.ts`). The byte bounds on one portal exchange, 32 MiB
-  in and 1 MiB out, are constants in `src/utils/api.ts`. `ROW_FETCH_CAP` is retired (#77). The time
+  SoQL), default 10,000, read per call so a value in `.env` applies (`maxRawRows` in
+  `src/tools/search.ts`). The byte bounds on one portal exchange, 32 MiB in and 1 MiB out, are
+  constants in `src/utils/api.ts`. `ROW_FETCH_CAP` is retired (#77). The time
   bounds, 30 s a portal request and 40 s a tool call across its requests, are constants in
   `src/utils/call-budget.ts`; a request that runs past its time is refused (`-32602`) and never sent
   again (#79).

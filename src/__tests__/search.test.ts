@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { handleSearch, getRowCount, MAX_ROWS, DEFAULT_PREVIEW_ROWS, MAX_RAW_ROWS } from '../tools/search.js';
+import { handleSearch, getRowCount, MAX_ROWS, DEFAULT_PREVIEW_ROWS, maxRawRows } from '../tools/search.js';
 import * as api from '../utils/api.js';
 
 // Mock the API module
@@ -127,7 +127,7 @@ describe('Search Tool', () => {
     test('"all" past the cap returns the first 10,000 rows, with next_offset and a limit_note (#77)', async () => {
       const mockFetch = vi.mocked(api.fetchFromSocrataApi);
       const totalRows = 150000;
-      const firstPage = Array(MAX_RAW_ROWS).fill({}).map((_, i) => ({ id: i }));
+      const firstPage = Array(maxRawRows()).fill({}).map((_, i) => ({ id: i }));
 
       mockFetch.mockResolvedValueOnce([{ count: totalRows.toString() }]);
       mockFetch.mockResolvedValueOnce(firstPage);
@@ -138,7 +138,7 @@ describe('Search Tool', () => {
         limit: 'all'
       });
 
-      expect(MAX_RAW_ROWS).toBe(10000);
+      expect(maxRawRows()).toBe(10000);
       expect(result).toEqual({
         data: firstPage,
         is_sample: false,
@@ -182,7 +182,7 @@ describe('Search Tool', () => {
 
     test('a limit past the cap is reduced to it, with a limit_note (the evaluation\'s limit 32016)', async () => {
       const mockFetch = vi.mocked(api.fetchFromSocrataApi);
-      const rows = Array(MAX_RAW_ROWS).fill({}).map((_, i) => ({ id: i }));
+      const rows = Array(maxRawRows()).fill({}).map((_, i) => ({ id: i }));
 
       mockFetch.mockResolvedValueOnce([{ count: '40000' }]);
       mockFetch.mockResolvedValueOnce(rows);
@@ -232,7 +232,7 @@ describe('Search Tool', () => {
       const mockFetch = vi.mocked(api.fetchFromSocrataApi);
 
       mockFetch.mockResolvedValueOnce([{ count: '120000' }]);
-      mockFetch.mockResolvedValueOnce(Array(MAX_RAW_ROWS).fill({}).map((_, i) => ({ id: i })));
+      mockFetch.mockResolvedValueOnce(Array(maxRawRows()).fill({}).map((_, i) => ({ id: i })));
 
       const result = await handleSearch({
         datasetId: 'large-limit-dataset',
@@ -473,6 +473,21 @@ describe('Search Tool', () => {
       } finally {
         delete process.env.MAX_RAW_ROWS;
         vi.resetModules();
+      }
+    });
+
+    test('reads MAX_RAW_ROWS per call: a value set after the module loaded applies, with no re-import', async () => {
+      // dotenv loads .env after every module has been imported (src/index.ts), so this is how a
+      // value from .env arrives (src/__tests__/env-after-dotenv.test.ts).
+      process.env.MAX_RAW_ROWS = '3';
+      try {
+        const mockFetch = vi.mocked(api.fetchFromSocrataApi);
+        mockFetch.mockResolvedValueOnce([{ unique_key: '1' }]);
+        const result = await handleSearch({ datasetId: 'abcd-1234', domain: 'data.test.gov', soqlQuery: 'SELECT unique_key' });
+        expect(mockFetch).toHaveBeenLastCalledWith('/resource/abcd-1234.json', { $query: 'SELECT unique_key LIMIT 3' }, 'https://data.test.gov');
+        expect(result.limit_note).toContain('Results limited to 3 rows');
+      } finally {
+        delete process.env.MAX_RAW_ROWS;
       }
     });
   });

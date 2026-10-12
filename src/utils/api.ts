@@ -9,7 +9,6 @@ import { summarizeRequest } from './log-summary.js';
 // default-portal layer, read before src/index.ts had run dotenv.config() (server#63).
 const MISSING_BASE_URL =
   'No portal base URL was given for this request; the caller must pass the base URL of the portal its call names.';
-const SOCRATA_APP_TOKEN = process.env.SOCRATA_APP_TOKEN ?? '';
 
 const DATASET_PATH_REGEX = /\/resource\/(\w{4}-\w{4})\.json$/i;
 const DATASET_ID_REGEX = /(\w{4}-\w{4})/i;
@@ -179,8 +178,11 @@ function redirectRefusal(response: AxiosResponse, requestUrl: string): McpError 
   );
 }
 
+// Read per request, not at import: src/index.ts loads .env (dotenv.config()) after every module
+// has been imported, so a token read at import missed one set in .env.
 function buildTokenHeader(): Record<string, string> {
-  return SOCRATA_APP_TOKEN ? { 'X-App-Token': SOCRATA_APP_TOKEN } : {};
+  const token = process.env.SOCRATA_APP_TOKEN ?? '';
+  return token ? { 'X-App-Token': token } : {};
 }
 
 function isDatasetPath(path: string): boolean {
