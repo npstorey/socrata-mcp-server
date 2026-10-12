@@ -12,6 +12,7 @@ import {
   ColumnInfo
 } from '../utils/api.js';
 import axios from 'axios';
+import { allowanceMs, timeBounds } from '../utils/call-budget.js';
 import { handleSearch, MAX_RAW_ROWS } from './search.js';
 import { retrieveDocuments } from './document-retrieval.js';
 // import { McpToolHandlerContext } from '@modelcontextprotocol/sdk/types.js'; // Removed incorrect import
@@ -234,9 +235,10 @@ async function handleMetrics(params: {
       {},
       baseUrl
     ),
+    // Held to the call's time like every other request (#79); a count that runs past it is left out.
     axios.get<Record<string, unknown>[]>(
       `${baseUrl}/resource/${datasetId}.json`,
-      { params: { '$select': 'count(*) as count', '$limit': 1 } }
+      { params: { '$select': 'count(*) as count', '$limit': 1 }, ...timeBounds(Math.max(1, allowanceMs())) }
     ).then(res => res.data).catch(() => null)
   ]);
 
