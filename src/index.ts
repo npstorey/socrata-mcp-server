@@ -38,6 +38,7 @@ import { composeSkillGuidance } from './skills/compose.js';
 import { getDefaultDomain, describeConfiguredPortal, NO_DEFAULT_PORTAL } from './utils/portal-config.js';
 import { installOutboundProxy } from './utils/outbound-proxy.js';
 import { summarizeResult } from './utils/log-summary.js';
+import { withCallLimit } from './utils/call-budget.js';
 
 // NOTE(#47): the prompts/resources request schemas were previously hand-rolled
 // here behind a comment claiming they were "not properly exported from SDK".
@@ -690,7 +691,7 @@ ${apiGuideNote}
         const parsed = searchToolZodSchema.parse(toolArgs);
         console.error(`[Server] Parsed search params:`, JSON.stringify(parsed, null, 2));
         
-        const result = await handleSearchTool(parsed);
+        const result = await withCallLimit(() => handleSearchTool(parsed));
         console.error('[Tool] Search result:', summarizeResult(result));
         
         return {
@@ -714,7 +715,7 @@ ${apiGuideNote}
       const parsed = fetchToolZodSchema.parse(toolArgs);
       console.error(`[Server] Parsed fetch params:`, JSON.stringify(parsed, null, 2));
       
-      const result = await handleFetchTool(parsed);
+      const result = await withCallLimit(() => handleFetchTool(parsed));
       console.error('[Tool] Fetch result:', summarizeResult(result));
       return {
         content: result.content,
@@ -742,7 +743,7 @@ ${apiGuideNote}
           throw new Error('Tool handler is not a function');
         }
         
-        const result = await handler(parsed);
+        const result = await withCallLimit(() => handler(parsed));
 
         let responseText: string;
         if (result === null || result === undefined) {

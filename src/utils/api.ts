@@ -1,5 +1,7 @@
 import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios';
 import { McpError, ErrorCode } from './mcp-errors.js';
+import { allowanceMs, callBudget, timeBounds, type CallBudget } from './call-budget.js';
+import { summarizeRequest } from './log-summary.js';
 
 // No default portal lives here. Every request names the portal of the call it serves: callers
 // pass `baseUrl`, built from the domain their own call resolved (src/utils/portal-config.ts).
@@ -13,8 +15,7 @@ const DATASET_PATH_REGEX = /\/resource\/(\w{4}-\w{4})\.json$/i;
 const DATASET_ID_REGEX = /(\w{4}-\w{4})/i;
 const PAGE_SIZE_LIMIT = 50000;
 
-// Request timeout and retry configuration
-const REQUEST_TIMEOUT_MS = 30_000; // 30 seconds
+// Retry configuration. How long a request and a tool call may take is in ./call-budget.ts (#79).
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 1_000; // 1 second, doubles each retry
 const RETRYABLE_STATUS_CODES = [429, 503, 502, 504];
@@ -51,29 +52,64 @@ function requestTooLarge(): McpError {
 }
 
 /**
- * Execute an axios request with timeout, and retry on transient failures.
- * Uses exponential backoff with jitter for 429/5xx responses.
+ * The answer to a request that ran past its time (#79): a refusal that says the portal took too
+ * long and how to ask for less, and one log line with the request's shape (`summarizeRequest`).
+ * The request is not sent again: a query that ran 30 s runs as long the next time, and the old
+ * retries held a call for about two minutes while the portal ran the same query four times.
+ *
+ * The refusal avoids the words the website's failure classifier reads as a timeout. The website
+ * shows the model a category, not this text (civic-ai-tools-website src/lib/streaming.ts,
+ * `describeToolFailureForLlm`): a timeout tells the model to report that the data could not be
+ * retrieved, while a refusal tells it to make a differently formed request, which is what a
+ * narrower query is. Other clients show the model this text.
  */
-async function requestWithRetry<T>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+function tookTooLong(url: string, params: Record<string, unknown>, budget: CallBudget, waitedMs: number, allowedMs: number): McpError {
+  const callMs = Date.now() - budget.start;
+  console.error(`[Portal] Took too long: ${summarizeRequest(url, params)} waited_ms=${waitedMs} allowed_ms=${allowedMs} call_ms=${callMs}`);
+  return new McpError(
+    ErrorCode.InvalidParams,
+    `The portal ${new URL(url).host} took too long to answer this request: this server waited ${Math.round(callMs / 1000)} s for it and stopped, and did not send it again, so nothing from it is returned. A narrower request may answer: a shorter date range in where, an aggregate (group with count(*)) instead of rows, fewer columns (select), or a smaller limit.`
+  );
+}
+
+/** Axios's `timeout` (silence) rejects with ECONNABORTED; the signal (total time) with ERR_CANCELED. */
+function ranPastItsTime(e: unknown): boolean {
+  return axios.isAxiosError(e) && (e.code === AxiosError.ECONNABORTED || e.code === AxiosError.ERR_CANCELED);
+}
+
+/**
+ * Execute an axios request within its call's time (./call-budget.ts), and retry on transient
+ * failures. Uses exponential backoff with jitter for 429/5xx responses. `params` are the request's
+ * own, for the log line when it runs past its time.
+ */
+async function requestWithRetry<T>(config: AxiosRequestConfig, params: Record<string, unknown>): Promise<AxiosResponse<T>> {
+  const budget = callBudget();
   let lastError: Error | undefined;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const allowedMs = allowanceMs(budget);
+    if (allowedMs <= 0) {
+      if (lastError) break;
+      throw tookTooLong(config.url!, params, budget, 0, 0);
+    }
+    const sentAt = Date.now();
     try {
       return await axios({
         ...config,
-        timeout: REQUEST_TIMEOUT_MS,
+        ...timeBounds(allowedMs),
         maxContentLength: MAX_RESPONSE_BYTES,
         maxBodyLength: MAX_REQUEST_BYTES
       });
     } catch (e: unknown) {
+      if (ranPastItsTime(e)) {
+        throw tookTooLong(config.url!, params, budget, Date.now() - sentAt, allowedMs);
+      }
       lastError = e instanceof Error ? e : new Error(String(e));
 
       if (attempt === MAX_RETRIES) break;
 
-      // Only retry on retryable status codes or network timeouts
-      const shouldRetry =
-        (axios.isAxiosError(e) && e.response && RETRYABLE_STATUS_CODES.includes(e.response.status)) ||
-        (axios.isAxiosError(e) && e.code === 'ECONNABORTED');
+      // Only retry on retryable status codes
+      const shouldRetry = axios.isAxiosError(e) && e.response && RETRYABLE_STATUS_CODES.includes(e.response.status);
 
       if (!shouldRetry) break;
 
@@ -94,6 +130,9 @@ async function requestWithRetry<T>(config: AxiosRequestConfig): Promise<AxiosRes
 
       // Add jitter (0-25% of wait time)
       waitMs += Math.random() * waitMs * 0.25;
+
+      // A retry is made only when its wait ends inside the call's time.
+      if (Date.now() + waitMs >= budget.deadline) break;
 
       await new Promise(resolve => setTimeout(resolve, waitMs));
     }
@@ -263,7 +302,7 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
           ...tokenHeader,
           'Content-Type': 'application/json'
         }
-      });
+      }, params);
       return response.data;
     }
 
@@ -275,9 +314,13 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
       url,
       params,
       headers: tokenHeader
-    });
+    }, params);
     return response.data;
   } catch (e: unknown) {
+    // A refusal made on the way (a request that ran past its time) goes out as it is.
+    if (e instanceof McpError) {
+      throw e;
+    }
     if (axios.isAxiosError(e)) {
       const axiosError = e as AxiosError;
 
@@ -288,12 +331,6 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
         throw requestTooLarge();
       }
 
-      if (axiosError.code === 'ECONNABORTED') {
-        throw new Error(
-          `API request timed out after ${REQUEST_TIMEOUT_MS / 1000}s (retried ${MAX_RETRIES} times). The data portal may be under heavy load.`
-        );
-      }
-
       if (axiosError.response) {
         const status = axiosError.response.status;
         if (status >= 300 && status < 400) {
@@ -301,7 +338,7 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
         }
         if (status === 429) {
           throw new Error(
-            `Rate limited by the data portal (HTTP 429) after ${MAX_RETRIES} retries. Too many requests — try again in a minute.`
+            `Rate limited by the data portal (HTTP 429). Too many requests — try again in a minute.`
           );
         }
         throw new Error(
@@ -309,7 +346,7 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
         );
       } else if (axiosError.request) {
         throw new Error(
-          `API request failed: No response received (retried ${MAX_RETRIES} times). Message: ${axiosError.message}`
+          `API request failed: No response received. Message: ${axiosError.message}`
         );
       } else {
         throw new Error(
