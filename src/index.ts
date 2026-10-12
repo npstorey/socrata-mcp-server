@@ -103,7 +103,7 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
   console.error('[Server] Creating Server instance...');
   
   const server = new Server(
-    { name: 'socrata-mcp-server', version: '0.9.1' },
+    { name: 'socrata-mcp-server', version: '0.9.2' },
     {
       capabilities: {
         tools: {},
@@ -215,7 +215,7 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
         },
         serverInfo: {
           name: 'socrata-mcp-server',
-          version: '0.9.1'
+          version: '0.9.2'
         }
       };
       
