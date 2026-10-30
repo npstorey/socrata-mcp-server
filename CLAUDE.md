@@ -109,3 +109,5 @@ changing a tool schema or response shape, check whether the spec or `open-questi
 Work lands via PRs to `main`; never push to `main`. `git commit -s` on every commit —
 the `Signed-off-by:` email must match the commit author email exactly, or DCO fails
 (absence is not the only way to fail it). See [CONTRIBUTING.md](CONTRIBUTING.md).
+Dependabot's PRs pass the same gates as any PR and merge only on the seat's GO, never on
+the bot's green alone ([the two keys](https://github.com/npstorey/civic-ai-tools/blob/main/docs/architecture/chat-type-taxonomy.md#gates-and-the-two-keys)).
