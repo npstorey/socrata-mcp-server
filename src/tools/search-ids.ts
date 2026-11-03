@@ -1,5 +1,6 @@
 import { fetchFromSocrataApi } from '../utils/api.js';
 import { McpError, ErrorCode } from '../utils/mcp-errors.js';
+import { summarizeError } from '../utils/log-summary.js';
 
 // Size limits
 const MAX_OBJECT_SIZE_KB = 2; // 2KB per object
@@ -185,7 +186,7 @@ export async function searchIds(params: {
             break;
           }
         } catch (error) {
-          console.error(`[SearchIds] Skipping oversized result:`, error);
+          console.error(`[SearchIds] Skipping oversized result: ${summarizeError(error)}`);
           // Skip this result
         }
       }
@@ -196,7 +197,7 @@ export async function searchIds(params: {
 
     return results;
   } catch (error) {
-    console.error('[SearchIds] Search error:', error);
+    console.error(`[SearchIds] Search error: ${summarizeError(error)}`);
     if (error instanceof McpError) {
       throw error;
     }

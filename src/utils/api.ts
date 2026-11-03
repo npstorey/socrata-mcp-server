@@ -319,7 +319,10 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
     }, params);
     return response.data;
   } catch (e: unknown) {
-    // A refusal made on the way (a request that ran past its time) goes out as it is.
+    // A refusal made on the way (a request that ran past its time) goes out as it is. Each error
+    // made here keeps axios's as its `cause`, which the log reads for the portal's status and the
+    // network's error code (src/utils/log-summary.ts, `summarizeError`); a caller receives only
+    // the message and the code, as before (#81).
     if (e instanceof McpError) {
       throw e;
     }
@@ -340,24 +343,28 @@ export async function fetchFromSocrataApi<T>(path: string, params: Record<string
         }
         if (status === 429) {
           throw new Error(
-            `Rate limited by the data portal (HTTP 429). Too many requests — try again in a minute.`
+            `Rate limited by the data portal (HTTP 429). Too many requests — try again in a minute.`,
+            { cause: e }
           );
         }
         throw new Error(
-          `API request failed: ${status} - ${axiosError.response.statusText}\nData: ${JSON.stringify(axiosError.response.data)}`
+          `API request failed: ${status} - ${axiosError.response.statusText}\nData: ${JSON.stringify(axiosError.response.data)}`,
+          { cause: e }
         );
       } else if (axiosError.request) {
         throw new Error(
-          `API request failed: No response received. Message: ${axiosError.message}`
+          `API request failed: No response received. Message: ${axiosError.message}`,
+          { cause: e }
         );
       } else {
         throw new Error(
-          `API request setup failed: ${axiosError.message}`
+          `API request setup failed: ${axiosError.message}`,
+          { cause: e }
         );
       }
     }
     if (e instanceof Error) {
-        throw new Error(`An unexpected error occurred: ${e.message}`);
+        throw new Error(`An unexpected error occurred: ${e.message}`, { cause: e });
     }
     throw new Error(`An unexpected and unknown error occurred: ${String(e)}`);
   }

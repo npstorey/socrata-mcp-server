@@ -37,7 +37,15 @@ import { McpError, ErrorCode } from './utils/mcp-errors.js';
 import { composeSkillGuidance } from './skills/compose.js';
 import { getDefaultDomain, describeConfiguredPortal, NO_DEFAULT_PORTAL } from './utils/portal-config.js';
 import { installOutboundProxy } from './utils/outbound-proxy.js';
-import { summarizeResult } from './utils/log-summary.js';
+import {
+  summarizeResult,
+  summarizeCall,
+  summarizeArgs,
+  summarizeMessage,
+  summarizeError,
+  summarizeZodIssues,
+  logName
+} from './utils/log-summary.js';
 import { withCallLimit } from './utils/call-budget.js';
 
 // NOTE(#47): the prompts/resources request schemas were previously hand-rolled
@@ -142,13 +150,15 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
   server.setRequestHandler = function(schema: any, handler: any) {
     console.error('[Server] Registering handler for schema:', schema);
     return originalSetRequestHandler(schema, async (request: any, ...args: any[]) => {
-      console.error('[Server] Handler called with request:', JSON.stringify(request, null, 2));
+      // A request by its method and size, never its text (#81); a tool call's shape is logged by
+      // the CallTool handler below.
+      console.error(`[Server] Handler called: ${summarizeMessage(request)}`);
       try {
         const result = await handler(request, ...args);
         console.error('[Server] Handler returned:', summarizeResult(result));
         return result;
       } catch (error) {
-        console.error('[Server] Handler error:', error);
+        console.error(`[Server] Handler error: ${summarizeError(error)}`);
         throw error;
       }
     });
@@ -157,7 +167,9 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
   // Handle Initialize - OpenAI sends this first
   try {
     server.setRequestHandler(InitializeRequestSchema, async (request) => {
-      console.error('[Server - Initialize] Request received:', JSON.stringify(request, null, 2));
+      console.error(
+        `[Server - Initialize] Request received: protocol=${/^\d{4}-\d{2}-\d{2}$/.test(String(request.params.protocolVersion)) ? request.params.protocolVersion : logName(request.params.protocolVersion)} client=${logName(request.params.clientInfo?.name)}`
+      );
       // The SDK's own rule (server/index.js `_oninitialize`): agree to the requested version
       // when the installed SDK supports it, otherwise answer the latest it supports. The SDK's
       // HTTP transport refuses any later request whose MCP-Protocol-Version is outside
@@ -346,7 +358,8 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
     const promptName = request.params.name;
     const args = request.params.arguments;
-    console.error(`[Server - GetPrompt] Request for prompt: ${promptName}, args:`, args);
+    // A prompt's arguments are a reader's words (a topic, a description): logged by length (#81).
+    console.error(`[Server - GetPrompt] Request for prompt: ${logName(promptName)}, args: ${summarizeArgs(args)}`);
 
     if (promptName === 'skill-guidance') {
       // Determine modality: explicit arg > transport inference
@@ -355,7 +368,7 @@ export async function createServer(transport?: OpenAICompatibleTransport): Promi
       if (composition.warning) {
         console.error(`[Server - GetPrompt] ${composition.warning}`);
       }
-      console.error(`[Server - GetPrompt] Composing skill-guidance with modality: ${modality}, posture: ${composition.postureDecision}`);
+      console.error(`[Server - GetPrompt] Composing skill-guidance with modality: ${modality === 'web' ? 'web' : 'local'}, posture: ${composition.postureDecision}`);
 
       return {
         description: `Socrata query skill guidance (${modality} mode${composition.postureApplied ? ', reference-demo posture' : ''})`,
@@ -674,7 +687,10 @@ ${apiGuideNote}
 
   // Handle CallTool
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    console.error('[Server] CallTool request:', JSON.stringify(request, null, 2));
+    // A tool call by its shape: the tool, the portal, the dataset, and each argument's length
+    // (src/utils/log-summary.ts). Never its text: a reader's question reaches `where`, `q` and
+    // `select` as words (#81).
+    console.error(`[Server] CallTool: ${summarizeCall(request.params?.name, request.params?.arguments, getDefaultDomain())}`);
     
     if (!request.params || typeof request.params !== 'object') {
       throw new Error('Invalid params: missing params object');
@@ -686,10 +702,7 @@ ${apiGuideNote}
   // Handle search tool
     if (toolName === 'search') {
       try {
-        console.error(`[Server] Calling search tool with args:`, JSON.stringify(toolArgs, null, 2));
-        
         const parsed = searchToolZodSchema.parse(toolArgs);
-        console.error(`[Server] Parsed search params:`, JSON.stringify(parsed, null, 2));
         
         const result = await withCallLimit(() => handleSearchTool(parsed));
         console.error('[Tool] Search result:', summarizeResult(result));
@@ -699,9 +712,9 @@ ${apiGuideNote}
           isError: false
         };
       } catch (error) {
-        console.error('[Tool] Search error:', error);
+        console.error(`[Tool] Search error: ${summarizeError(error)}`);
         if (error instanceof z.ZodError) {
-          console.error('[Server] ZodError issues:', JSON.stringify(error.issues, null, 2));
+          console.error(`[Server] ZodError issues: ${summarizeZodIssues(error.issues)}`);
         }
         throw error;
       }
@@ -710,10 +723,7 @@ ${apiGuideNote}
   // Handle fetch tool
   if (toolName === 'fetch') {
     try {
-      console.error(`[Server] Calling fetch tool with args:`, JSON.stringify(toolArgs, null, 2));
-      
       const parsed = fetchToolZodSchema.parse(toolArgs);
-      console.error(`[Server] Parsed fetch params:`, JSON.stringify(parsed, null, 2));
       
       const result = await withCallLimit(() => handleFetchTool(parsed));
       console.error('[Tool] Fetch result:', summarizeResult(result));
@@ -722,9 +732,9 @@ ${apiGuideNote}
         isError: false
       };
     } catch (error) {
-      console.error('[Tool] Document retrieval error:', error);
+      console.error(`[Tool] Document retrieval error: ${summarizeError(error)}`);
       if (error instanceof z.ZodError) {
-        console.error('[Server] ZodError issues:', JSON.stringify(error.issues, null, 2));
+        console.error(`[Server] ZodError issues: ${summarizeZodIssues(error.issues)}`);
       }
       throw error;
     }
@@ -733,10 +743,7 @@ ${apiGuideNote}
     // Handle original get_data tool for backward compatibility
     if (toolName === UNIFIED_SOCRATA_TOOL.name) {
       try {
-        console.error(`[Server] Calling tool: ${toolName} with args:`, JSON.stringify(toolArgs, null, 2));
-        
         const parsed = socrataToolZodSchema.parse(toolArgs);
-        console.error(`[Server] Parsed Socrata params:`, JSON.stringify(parsed, null, 2));
         
         const handler = UNIFIED_SOCRATA_TOOL.handler;
         if (typeof handler !== 'function') {
@@ -762,9 +769,9 @@ ${apiGuideNote}
           isError: false
         };
       } catch (error) {
-        console.error('[Tool] Error:', error);
+        console.error(`[Tool] Error: ${summarizeError(error)}`);
         if (error instanceof z.ZodError) {
-          console.error('[Server] ZodError issues:', JSON.stringify(error.issues, null, 2));
+          console.error(`[Server] ZodError issues: ${summarizeZodIssues(error.issues)}`);
         }
         throw error;
       }
@@ -780,10 +787,14 @@ ${apiGuideNote}
 // Global map to store transports by session ID
 const transports: Map<string, { transport: OpenAICompatibleTransport, server: Server, cleanup: () => Promise<void> }> = new Map();
 
-async function startApp() {
+/**
+ * Start the HTTP transport on `port` (default: `PORT`, else 8000, as before) and return the
+ * listening server. Exported so a test can drive the real Express handler on a port of its own
+ * choosing (src/__tests__/request-log-shape.test.ts); the entry point below calls it with none.
+ */
+export async function startApp(port: number = Number(process.env.PORT) || 8000): Promise<import('node:http').Server> {
   try {
     const app = express();
-    const port = Number(process.env.PORT) || 8000;
     
     console.error(
       '[Environment] DATA_PORTAL_URL:',
@@ -918,14 +929,14 @@ async function startApp() {
       
       // Setup transport event handlers
       transport.onmessage = (message: any, extra?: any) => {
-        console.error('[Transport] onmessage fired!', JSON.stringify(message, null, 2));
+        console.error(`[Transport] onmessage fired! ${summarizeMessage(message)}`);
         if (extra) {
-          console.error('[Transport] onmessage extra:', JSON.stringify(extra, null, 2));
+          console.error(`[Transport] onmessage extra keys: ${Object.keys(extra).join(',') || 'none'}`);
         }
       };
 
       transport.onerror = (error: any) => {
-        console.error('[Transport] onerror fired! Error:', error);
+        console.error(`[Transport] onerror fired! Error: ${summarizeError(error)}`);
       };
 
       transport.onclose = () => {
@@ -955,7 +966,7 @@ async function startApp() {
           console.error('[Transport.handleRequest] Completed, result:', result);
           return result;
         } catch (error) {
-          console.error('[Transport.handleRequest] Error:', error);
+          console.error(`[Transport.handleRequest] Error: ${summarizeError(error)}`);
           throw error;
         }
       };
@@ -1028,9 +1039,9 @@ async function startApp() {
       let currentRequestBody: any = null;
       let protocolVersion: string | undefined = undefined;
       
-      // For POST requests, log parsed body (now available via Express body parser)
+      // For POST requests, log the body's method, id and size, never its text (#81)
       if (req.method === 'POST' && req.body) {
-        console.error('[Express] Request body:', req.body);
+        console.error(`[Express] Request body: ${summarizeMessage(req.body)}`);
         currentRequestBody = req.body;
         
         // Check if this is an initialize request without a session ID
@@ -1154,7 +1165,7 @@ async function startApp() {
       };
       
       res.json = function(data: any) {
-        console.error('[Express] Response.json:', JSON.stringify(data, null, 2));
+        console.error(`[Express] Response.json: ${summarizeMessage(data)}`);
         
         // If this is an initialize response, ensure we're sending the session ID
         if (data && data.result && !data.error) {
@@ -1181,12 +1192,8 @@ async function startApp() {
         if (chunk) {
           const chunkStr = chunk.toString();
           
-          // Log raw data with increased limit (2000 bytes)
-          if (chunk.length < 2000) {
-            console.error('[Express] Response.write data:', chunkStr);
-          } else {
-            console.error('[Express] Response.write data (truncated):', chunkStr.substring(0, 2000) + '... [TRUNCATED]');
-          }
+          // The data itself is not logged: a result carries a portal's records, and an error
+          // quotes the query back (#77, #81). Its length is logged above, its shape below.
           
           // Parse SSE data for structured logging
           if (chunkStr.includes('event:') && chunkStr.includes('data:')) {
@@ -1194,7 +1201,7 @@ async function startApp() {
               const dataMatch = chunkStr.match(/data:\s*(.+?)(?:\n\n|$)/s);
               if (dataMatch) {
                 const jsonData = JSON.parse(dataMatch[1]);
-                console.error('[Express] SSE JSON payload:', JSON.stringify(jsonData, null, 2));
+                console.error(`[Express] SSE JSON payload: ${summarizeMessage(jsonData)}`);
                 
                 // Log specific information based on response type
                 if (jsonData.result && jsonData.result.tools) {
@@ -1210,7 +1217,7 @@ async function startApp() {
                 }
               }
             } catch (e) {
-              console.error('[Express] Failed to parse SSE JSON:', e instanceof Error ? e.message : String(e));
+              console.error(`[Express] Failed to parse SSE JSON: ${summarizeError(e)}`);
             }
           }
           
@@ -1252,10 +1259,9 @@ async function startApp() {
       res.end = function(chunk?: any, encoding?: any, callback?: any) {
         console.error('[Express] Response.end called');
         if (chunk) {
-          const preview = typeof chunk === 'string' ? chunk.substring(0, 500) : 
-                          Buffer.isBuffer(chunk) ? chunk.toString().substring(0, 500) : 
-                          'non-string data';
-          console.error('[Express] Response.end data:', preview);
+          const size =
+            typeof chunk === 'string' ? `bytes=${Buffer.byteLength(chunk)}` : chunk instanceof Uint8Array ? `bytes=${chunk.byteLength}` : 'non-string data';
+          console.error(`[Express] Response.end data: ${size}`);
         }
         
         // Removed extra roots.listChanged event - not part of MCP spec and causes issues with OpenAI
@@ -1322,7 +1328,7 @@ async function startApp() {
           }
         }
       } catch (error) {
-        console.error('[Express] Error handling request:', error);
+        console.error(`[Express] Error handling request: ${summarizeError(error)}`);
         if (!res.headersSent) {
           res.status(500).json({ error: 'Internal server error' });
         }
@@ -1366,6 +1372,7 @@ async function startApp() {
     process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
+    return httpServer;
   } catch (error) {
     console.error('[Fatal] Error during startup:', error);
     

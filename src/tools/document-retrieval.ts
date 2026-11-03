@@ -1,6 +1,7 @@
 import { fetchFromSocrataApi } from '../utils/api.js';
 import { documentCache } from '../utils/cache.js';
 import { McpError, ErrorCode } from '../utils/mcp-errors.js';
+import { summarizeError } from '../utils/log-summary.js';
 
 // Size limits
 const MAX_ROWS_PER_REQUEST = 50; // Maximum 50 rows per request
@@ -101,7 +102,7 @@ async function detectIdField(datasetId: string, domain: string): Promise<string>
     // Default to :id
     return ':id';
   } catch (error) {
-    console.warn('[DocumentRetrieval] Could not detect ID field:', error);
+    console.warn(`[DocumentRetrieval] Could not detect ID field: ${summarizeError(error)}`);
     return ':id';
   }
 }
@@ -231,7 +232,7 @@ export async function retrieveDocuments(
     return documents;
     
   } catch (error) {
-    console.error('[DocumentRetrieval] Error fetching documents:', error);
+    console.error(`[DocumentRetrieval] Error fetching documents: ${summarizeError(error)}`);
     
     // Return partial results if any
     if (documents.length > 0) {
@@ -333,7 +334,7 @@ export async function retrieveAllDocuments(params: {
     return documents;
     
   } catch (error) {
-    console.error('[DocumentRetrieval] Error fetching all documents:', error);
+    console.error(`[DocumentRetrieval] Error fetching all documents: ${summarizeError(error)}`);
     if (error instanceof McpError) {
       throw error;
     }

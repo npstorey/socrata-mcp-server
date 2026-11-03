@@ -41,6 +41,9 @@ export function composeSkillGuidance(
   // Overlay selection: unchanged semantics — web gets the web overlay,
   // everything else gets the local overlay.
   const overlay = modality === 'web' ? WEB_SKILL : LOCAL_SKILL;
+  // The log strings name the overlay served, never the argument as given: `modality` comes from
+  // a client's prompt arguments and can be any text (#81).
+  const served = modality === 'web' ? 'web' : 'local';
   const generic = BASE_SKILL + SKILL_SECTION_SEPARATOR + overlay;
 
   if (posture === undefined || posture === '') {
@@ -52,7 +55,7 @@ export function composeSkillGuidance(
       text: generic,
       postureApplied: false,
       postureDecision: `none (unrecognized SKILL_POSTURE "${posture}")`,
-      warning: `Unrecognized SKILL_POSTURE value "${posture}" — recognized value(s): ${RECOGNIZED_POSTURES.map(p => `"${p}"`).join(', ')}. Serving generic ${modality} guidance (fail-open).`
+      warning: `Unrecognized SKILL_POSTURE value "${posture}" — recognized value(s): ${RECOGNIZED_POSTURES.map(p => `"${p}"`).join(', ')}. Serving generic ${served} guidance (fail-open).`
     };
   }
 
@@ -61,7 +64,7 @@ export function composeSkillGuidance(
     return {
       text: generic,
       postureApplied: false,
-      postureDecision: `none ("${posture}" set, but posture does not apply to ${modality} modality)`
+      postureDecision: `none ("${posture}" set, but posture does not apply to ${served} modality)`
     };
   }
 
