@@ -338,6 +338,11 @@ function optionalField<T extends z.ZodTypeAny>(schema: T) {
   return z.preprocess(blankAsAbsent, schema.optional());
 }
 
+// A whole number by zod 3's `.int()` rule, `Number.isInteger` (#84). Zod 4's `.int()` also refuses an
+// integer beyond ±(2^53 − 1), which zod 3 accepted; this keeps what `limit` and `offset` accept as it
+// was, and keeps zod 3's wording for a number that is not whole.
+const WHOLE_NUMBER = { message: 'Expected integer, received float' };
+
 // 1️⃣ Zod definition for the Socrata tool's parameters.
 // This is used by the MCP SDK to parse/validate parameters from the client.
 export const socrataToolZodSchema = z.object({
@@ -351,8 +356,8 @@ export const socrataToolZodSchema = z.object({
   // module-load time. The advertised copy is jsonParameters.properties.domain.
   domain: optionalField(z.string()).describe('The Socrata domain to query; defaults to the configured portal (DATA_PORTAL_URL) when one is set, and a call without one is refused when none is'),
   portal: optionalField(z.string()).describe('Alias for domain — the Socrata portal domain'),
-  limit: optionalField(z.union([z.coerce.number().int().positive(), z.literal('all')])).describe('Number of results to return, or "all"; a query returns at most MAX_RAW_ROWS rows per call (handleSearch)'),
-  offset: optionalField(z.number().int().nonnegative()).describe('Offset for pagination'),
+  limit: optionalField(z.union([z.coerce.number().refine(Number.isInteger, WHOLE_NUMBER).positive(), z.literal('all')])).describe('Number of results to return, or "all"; a query returns at most MAX_RAW_ROWS rows per call (handleSearch)'),
+  offset: optionalField(z.number().refine(Number.isInteger, WHOLE_NUMBER).nonnegative()).describe('Offset for pagination'),
   select: optionalField(z.string()).describe('SoQL SELECT clause'),
   where: optionalField(z.string()).describe('SoQL WHERE clause'),
   order: optionalField(z.string()).describe('SoQL ORDER BY clause'),

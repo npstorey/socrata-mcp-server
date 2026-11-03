@@ -281,7 +281,10 @@ export function summarizeError(error: unknown): string {
   return parts.join(' ');
 }
 
-/** Zod issues as `path:code` pairs. Never a message: an enum's message quotes the value it was given. */
+/**
+ * Zod issues as `path:code` pairs. Never a message: zod 3's enum message quoted the value it was
+ * given, and a refinement's message can carry any text.
+ */
 export function summarizeZodIssues(issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; code: string }>): string {
   if (issues.length === 0) return 'none';
   return issues

@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 // Schema for the search response with metadata
 export const searchResponseSchema = z.object({
-  data: z.array(z.record(z.unknown())),
+  data: z.array(z.record(z.string(), z.unknown())),
   is_sample: z.boolean().describe('Whether the returned data is a sample/preview of a larger dataset'),
   returned_rows: z.number().describe('Number of rows actually returned in this response'),
   total_rows: z.number().describe('Total number of rows available in the dataset'),
