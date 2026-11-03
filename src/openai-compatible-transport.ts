@@ -1,6 +1,7 @@
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { Request, Response } from 'express';
 import crypto from 'crypto';
+import { summarizeError, summarizeMessage } from './utils/log-summary.js';
 
 export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
   private sessionStore: Map<string, { createdAt: Date; initialized: boolean }> = new Map();
@@ -83,7 +84,7 @@ export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
     // For POST requests, check if we need to inject a session ID
     if (req.method === 'POST' && req.body) {
       console.log('[OpenAICompatibleTransport] POST request with body detected');
-      console.log('[OpenAICompatibleTransport] Request body:', req.body);
+      console.log(`[OpenAICompatibleTransport] Request body: ${summarizeMessage(req.body)}`);
       
       // Parse the body to check if it's an initialize request. A caller may
       // hand us an already-parsed body (index.ts passes the raw text through);
@@ -93,7 +94,8 @@ export class OpenAICompatibleTransport extends StreamableHTTPServerTransport {
       try {
         parsedMessage = typeof bodySource === 'string' ? JSON.parse(bodySource) : bodySource;
       } catch (e) {
-        console.error('[OpenAICompatibleTransport] Failed to parse body:', e);
+        // A parse error's message quotes the text it failed on (#81).
+        console.error(`[OpenAICompatibleTransport] Failed to parse body: ${summarizeError(e)}`);
         parsedMessage = null;
       }
 
