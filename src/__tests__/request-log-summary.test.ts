@@ -125,11 +125,10 @@ describe('summarizeError', () => {
     expect(summarizeError({ message: TEXT })).toBe('class=object');
   });
 
-  it("never logs a zod error's message, which quotes the value given", () => {
+  it("never logs a zod error's message (zod 3's enum message quoted the value given; zod 4's does not)", () => {
     const result = z.object({ type: z.enum(['catalog', 'query']) }).safeParse({ type: TEXT });
     expect(result.success).toBe(false);
     if (result.success) return;
-    expect(result.error.message).toContain(TEXT);
     expect(summarizeError(result.error)).not.toContain(TEXT);
     expect(summarizeZodIssues(result.error.issues)).toBe(`type:${result.error.issues[0].code}`);
   });
