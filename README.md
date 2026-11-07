@@ -60,6 +60,7 @@ npm run dev   # Starts on http://localhost:10000 (with PORT=10000 from .env)
 PORT=10000                                     # Project convention (local dev + Render). The code falls back to 8000 if PORT is unset.
 DATA_PORTAL_URL=https://data.cityofnewyork.us  # Optional. The default portal for a call that names none. Unset: no default (below).
 SOCRATA_APP_TOKEN=                             # Optional Socrata app token, sent as X-App-Token on portal requests for higher rate limits. Without it, portals apply stricter anonymous throttling.
+SOCRATA_MIN_REQUEST_INTERVAL_MS=               # Optional. Least ms between requests to one portal host. Unset or 0: no gap (below).
 SKILL_POSTURE=                                 # Optional skill-guidance posture. Unset: generic web overlay only. `reference-demo`: appends the demo-posture overlay (demo limits + CTA) for web modality. See https://github.com/npstorey/civic-ai-tools/blob/main/docs/skills/README.md for the composition model.
 ```
 
@@ -143,6 +144,7 @@ CI builds with no build argument, so the defaults stay the tested reference. [`s
 | `PORT` | The port the HTTP transport listens on. Default 8000, which is the port the image exposes. |
 | `DATA_PORTAL_URL` | The default portal for a call that names none, e.g. `https://data.cityofnewyork.us`. Unset: no default, and such a call is refused per call (see [Environment variables](#environment-variables)). An instance behind a single-portal deployment of the [civic-ai-tools website](https://github.com/npstorey/civic-ai-tools-website) sets this to the same portal as the app's `SITE_DEFAULT_PORTAL`. |
 | `SOCRATA_APP_TOKEN` | Sent as `X-App-Token` on every portal request, for the portal's higher rate limit. Without it, portals apply their anonymous throttle. |
+| `SOCRATA_MIN_REQUEST_INTERVAL_MS` | Optional. The least time, in ms, this server leaves between the requests it sends to one portal host, shared by every call (at most 10000). Unset or 0: no gap, the default. Socrata publishes no request-rate number ([app tokens](https://dev.socrata.com/docs/app-tokens)), so this is for an operator whose portal answers bursts with 429s. On a hosted server the gap is a queue shared by all users and spends each call's 40 s limit; a request with no turn left inside that limit is refused unsent. A `Retry-After` header on a 429 or 503, in seconds or as a date, is honored whether or not this is set, when the wait ends inside the call's limit. |
 | `SKILL_POSTURE` | Skill-guidance posture overlay. Leave unset for a generic deployment. |
 | `MAX_RAW_ROWS` | Most rows one `get_data` query returns: the cap on `limit` (a larger one is reduced to it, with a `limit_note`), on `"all"` (every matching row up to it, with `next_offset` when more remain), and on a non-aggregating SoQL query. Default 10000. Whatever it is set to, a portal answer over 32 MiB, or a request body over 1 MiB, is refused. |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | The egress proxy for portal calls, below. |

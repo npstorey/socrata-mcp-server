@@ -2,6 +2,7 @@ import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios';
 import { McpError, ErrorCode } from './mcp-errors.js';
 import { allowanceMs, callBudget, timeBounds, type CallBudget } from './call-budget.js';
 import { summarizeRequest } from './log-summary.js';
+import { MIN_INTERVAL_ENV, minIntervalMs, retryAfterMs, takeTurn } from './portal-pacing.js';
 
 // No default portal lives here. Every request names the portal of the call it serves: callers
 // pass `baseUrl`, built from the domain their own call resolved (src/utils/portal-config.ts).
@@ -71,6 +72,20 @@ function tookTooLong(url: string, params: Record<string, unknown>, budget: CallB
   );
 }
 
+/**
+ * The answer to a request that could not get a turn inside its call's limit
+ * (./portal-pacing.ts): the operator asked for a gap between requests to this portal, and the
+ * turns before the limit ends are already taken. Nothing was sent.
+ */
+function noTurnLeft(url: string, params: Record<string, unknown>, budget: CallBudget): McpError {
+  const callMs = Date.now() - budget.start;
+  console.error(`[Portal] No turn left: ${summarizeRequest(url, params)} interval_ms=${minIntervalMs()} call_ms=${callMs}`);
+  return new McpError(
+    ErrorCode.InvalidParams,
+    `This server leaves at least ${minIntervalMs()} ms between its requests to ${new URL(url).host} (${MIN_INTERVAL_ENV}), and the turns left inside this call's limit are already taken by other requests, so this request was not sent and nothing from it is returned. Ask again in a few seconds.`
+  );
+}
+
 /** Axios's `timeout` (silence) rejects with ECONNABORTED; the signal (total time) with ERR_CANCELED. */
 function ranPastItsTime(e: unknown): boolean {
   return axios.isAxiosError(e) && (e.code === AxiosError.ECONNABORTED || e.code === AxiosError.ERR_CANCELED);
@@ -85,7 +100,17 @@ async function requestWithRetry<T>(config: AxiosRequestConfig, params: Record<st
   const budget = callBudget();
   let lastError: Error | undefined;
 
+  const host = new URL(config.url!).host;
+
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const turnWaitMs = takeTurn(host, budget.deadline);
+    if (turnWaitMs === null) {
+      if (lastError) break;
+      throw noTurnLeft(config.url!, params, budget);
+    }
+    if (turnWaitMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, turnWaitMs));
+    }
     const allowedMs = allowanceMs(budget);
     if (allowedMs <= 0) {
       if (lastError) break;
@@ -115,15 +140,13 @@ async function requestWithRetry<T>(config: AxiosRequestConfig, params: Record<st
       // Exponential backoff with jitter
       const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt);
 
-      // For 429, respect Retry-After header if present
+      // For 429 and 503, respect a Retry-After header (seconds or an HTTP date) if present
       let waitMs = backoff;
-      if (axios.isAxiosError(e) && e.response?.status === 429) {
-        const retryAfter = e.response.headers['retry-after'];
-        if (retryAfter) {
-          const retrySeconds = parseInt(retryAfter, 10);
-          if (!isNaN(retrySeconds)) {
-            waitMs = Math.max(retrySeconds * 1000, backoff);
-          }
+      const status = axios.isAxiosError(e) ? e.response?.status : undefined;
+      if (axios.isAxiosError(e) && (status === 429 || status === 503)) {
+        const asked = retryAfterMs(e.response?.headers['retry-after']);
+        if (asked !== undefined) {
+          waitMs = Math.max(asked, backoff);
         }
       }
 
