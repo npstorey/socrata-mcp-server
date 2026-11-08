@@ -1,23 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // REMOVE .js extensions for SDK imports in mocks and actual imports
+// Both mocks are called with `new`. Since vitest 4 a mock called with `new` constructs
+// its implementation, so the implementation is a `function`, not an arrow function.
 vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => {
   return {
-    McpServer: vi.fn().mockImplementation(() => ({
-      connect: vi.fn(),
-      tool: vi.fn(),
-      sendLoggingMessage: vi.fn(),
-    })),
+    McpServer: vi.fn().mockImplementation(function () {
+      return {
+        connect: vi.fn(),
+        tool: vi.fn(),
+        sendLoggingMessage: vi.fn(),
+      };
+    }),
   };
 });
 
 vi.mock('@modelcontextprotocol/sdk/server/stdio', () => { // NO suffix
   return {
-    StdioServerTransport: vi.fn().mockImplementation(() => ({
-      start: vi.fn(),
-      send: vi.fn(),
-      close: vi.fn(),
-    })),
+    StdioServerTransport: vi.fn().mockImplementation(function () {
+      return {
+        start: vi.fn(),
+        send: vi.fn(),
+        close: vi.fn(),
+      };
+    }),
   };
 });
 
