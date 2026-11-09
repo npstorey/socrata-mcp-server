@@ -132,7 +132,8 @@ describe('a portal request that runs past its time', () => {
       expect((refusal as McpError).code).toBe(ErrorCode.InvalidParams);
       expect(refusal.message.replace(/waited \d+ s/, 'waited N s')).toBe(refusalText(origin.host));
       expect(refusal.message).not.toContain('retried');
-      expect(misclassifyingWordsIn(refusal.message), refusal.message).toEqual([]);
+      // Host removed first: a random port can spell a listed status code (#102).
+      expect(misclassifyingWordsIn(refusal.message.replaceAll(origin.host, '<host>')), refusal.message).toEqual([]);
       // Main sent it four times, 8.8 s at a 300 ms limit; the bound is loose for a loaded machine.
       expect(elapsed).toBeGreaterThanOrEqual(290);
       expect(elapsed).toBeLessThan(3_000);
@@ -153,7 +154,8 @@ describe('a portal request that runs past its time', () => {
 
       expect(refusal).toBeInstanceOf(McpError);
       expect(refusal.message.replace(/waited \d+ s/, 'waited N s')).toBe(refusalText(spelled.host));
-      expect(misclassifyingWordsIn(refusal.message), refusal.message).toEqual([]);
+      // Host removed first: this port spells a listed status code (#102).
+      expect(misclassifyingWordsIn(refusal.message.replaceAll(spelled.host, '<host>')), refusal.message).toEqual([]);
     } finally {
       await spelled.close();
     }

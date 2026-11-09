@@ -172,7 +172,8 @@ describe('requests to a portal', () => {
     expect(refusal).toBeInstanceOf(McpError);
     expect((refusal as McpError).code).toBe(ErrorCode.InvalidParams);
     expect(refusal.message).toContain(MIN_INTERVAL_ENV);
-    expect(misclassifyingWordsIn(refusal.message)).toEqual([]);
+    // Host removed first: a random port can spell a listed status code (#102).
+    expect(misclassifyingWordsIn(refusal.message.replaceAll(origin.host, '<host>')), refusal.message).toEqual([]);
     expect(origin.arrivals).toHaveLength(1);
   });
 
@@ -189,7 +190,8 @@ describe('requests to a portal', () => {
 
       expect(refusal).toBeInstanceOf(McpError);
       expect(refusal.message).toContain(spelled.host);
-      expect(misclassifyingWordsIn(refusal.message)).toEqual([]);
+      // Host removed first: this port spells a listed status code (#102).
+      expect(misclassifyingWordsIn(refusal.message.replaceAll(spelled.host, '<host>')), refusal.message).toEqual([]);
       expect(spelled.arrivals).toHaveLength(1);
     } finally {
       await spelled.close();
