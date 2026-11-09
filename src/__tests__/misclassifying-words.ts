@@ -1,3 +1,5 @@
+import type { Server } from 'node:http';
+
 /**
  * Words the website's failure classifier reads as "the source was unreachable, slow or
  * rate-limited" (civic-ai-tools-website `src/lib/streaming.ts` `classifyStreamError`, at
@@ -19,4 +21,31 @@ export const MISCLASSIFYING_WORDS = [
 export function misclassifyingWordsIn(message: string): string[] {
   const lower = message.toLowerCase();
   return MISCLASSIFYING_WORDS.filter((word) => lower.includes(word));
+}
+
+/**
+ * Listens `server` on the first free loopback port from 42901 to 42999 and returns the port. Each
+ * of those ports spells `429`, a listed word. Some refusals name the portal's host, and a test
+ * origin's host is `127.0.0.1:<port>`, so a random port can put a listed word in a refusal whose
+ * own words carry none (#102). A case on one of these ports keeps that from deciding a word check.
+ */
+export async function listenOnAPortSpelling429(server: Server): Promise<number> {
+  for (let port = 42_901; port <= 42_999; port++) {
+    const listening = await new Promise<boolean>((resolve, reject) => {
+      const onError = (error: NodeJS.ErrnoException) => {
+        server.off('listening', onListening);
+        if (error.code === 'EADDRINUSE') resolve(false);
+        else reject(error);
+      };
+      const onListening = () => {
+        server.off('error', onError);
+        resolve(true);
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(port, '127.0.0.1');
+    });
+    if (listening) return port;
+  }
+  throw new Error('no free loopback port from 42901 to 42999');
 }
