@@ -5,15 +5,17 @@
 // proxy. The conventional way an operator says so is `HTTP_PROXY` /
 // `HTTPS_PROXY` / `NO_PROXY`.
 //
-// AXIOS READS THOSE VARIABLES, AND GETS THEM WRONG FOR HTTPS. Measured at axios
-// 1.9.0 against a loopback proxy that admits HTTPS only through `CONNECT` (the
-// usual egress-proxy setup): with `HTTPS_PROXY` set, axios sends
+// AXIOS READS THOSE VARIABLES, AND AT 1.9.0 GOT THEM WRONG FOR HTTPS. Measured at
+// axios 1.9.0 against a loopback proxy that admits HTTPS only through `CONNECT`
+// (the usual egress-proxy setup): with `HTTPS_PROXY` set, axios sent
 // `GET https://portal/...` to the proxy as a plain absolute-form request and
-// never opens a tunnel (`node_modules/axios/lib/adapters/http.js`, `setProxy`:
-// the request's protocol becomes the proxy's `http:` and its path the full
-// portal URL). The proxy refuses with 405 and every portal call fails. And with
-// only `HTTP_PROXY` set, axios ignores the proxy for `https://` destinations
-// altogether (proxy-from-env falls back to `all_proxy`, never to `http_proxy`).
+// never opened a tunnel (`node_modules/axios/lib/adapters/http.js`, `setProxy`:
+// the request's protocol became the proxy's `http:` and its path the full
+// portal URL). The proxy refused with 405 and every portal call failed. axios
+// 1.21.0 opens the `CONNECT` tunnel itself (measured 2026-11-09, same proxy).
+// At both versions (1.21.0 measured 2026-11-09), with only `HTTP_PROXY` set,
+// axios ignores the proxy for `https://` destinations altogether
+// (proxy-from-env falls back to `all_proxy`, never to `http_proxy`).
 // So the routing decision, the tunnel and the fallback all have to be ours.
 //
 // HOW. Two agents, one per destination protocol, whose `createConnection`
@@ -404,7 +406,8 @@ export function installOutboundProxy(env: EnvRecord = process.env, instance: Axi
   instance.defaults.httpAgent = new ProxyTunnelAgent(settings, { keepAlive: true });
   instance.defaults.httpsAgent = new SecureProxyTunnelAgent(settings, { keepAlive: true });
   // Off, so axios's own reading of the same variables (the absolute-form
-  // request measured above) never runs alongside the tunnel.
+  // request measured above at 1.9.0, its own tunnel at 1.21.0) never runs
+  // alongside this tunnel.
   instance.defaults.proxy = false;
   installations.set(instance, { fingerprint, previous });
 

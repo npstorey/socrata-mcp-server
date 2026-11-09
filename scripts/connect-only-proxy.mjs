@@ -3,7 +3,7 @@
  * A forward proxy that admits a destination ONLY through `CONNECT`: the shape
  * of the egress proxy a deployment on a private network puts in front of this
  * server. A plain absolute-form request (`GET https://portal/...`), which is
- * what axios sends on its own (see src/utils/outbound-proxy.ts), is refused
+ * what axios 1.9.0 sent on its own (see src/utils/outbound-proxy.ts), is refused
  * with 405 and logged. A `CONNECT` is tunnelled to the authority it names.
  *
  * Zero dependencies. Used by the container-image job in
