@@ -72,9 +72,11 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
   [`.claude/rules/skills.md`](.claude/rules/skills.md).
 - `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` — optional; the egress proxy for portal calls, honoured
   through a CONNECT tunnel by `src/utils/outbound-proxy.ts` (installed from `src/index.ts` after
-  dotenv). Unset, nothing is installed. axios's own reading of these variables sends `https://`
-  requests to the proxy in absolute form, no tunnel, which a CONNECT-only proxy refuses; that is
-  why the module exists. README "Run in a container" has the operator-facing semantics.
+  dotenv). Unset, nothing is installed. The module switches axios's own proxy handling off
+  (`proxy: false`). axios 1.9.0, which it was written against, sent `https://` requests to the
+  proxy in absolute form, no tunnel, which a CONNECT-only proxy refuses; axios 1.21.0 tunnels
+  through CONNECT on its own (measured 2026-11-09). README "Run in a container" has the
+  operator-facing semantics.
 - `MAX_RAW_ROWS` — optional; the most rows one `get_data` query returns (`limit`, `"all"`, raw
   SoQL), default 10,000, read per call so a value in `.env` applies (`maxRawRows` in
   `src/tools/search.ts`). The byte bounds on one portal exchange, 32 MiB in and 1 MiB out, are
