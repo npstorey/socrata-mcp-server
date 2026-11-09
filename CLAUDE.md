@@ -38,10 +38,10 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
 - `npm run clean && npm run build:tsc` — `tsc --outDir dist`, silent on success. CI runs
   those two pieces rather than `npm run build`, whose `prebuild-check` step dumps ~1,100
   lines of SDK diagnostics and produces no artifacts.
-- `npm test` — `Test Files 30 passed | 2 skipped (32)`, `Tests 291 passed | 9 skipped (300)`.
+- `npm test` — `Test Files 33 passed | 2 skipped (35)`, `Tests 328 passed | 9 skipped (337)`.
   The 9: 6 live-API integration tests behind `RUN_INTEGRATION=1` (`npm run
   test:integration`), and 3 hardcoded `.skip`s in the transport-sequence tests.
-  <!-- measured 2026-10-12 at release 0.9.2, with settings read after dotenv; before it 29/2/31 and 287/9/296 with the per-call time limit (#79), and 27/2/29 and 270/9/279 on 2026-10-11 with the data-path fixes (#75, #76, #77) -->
+  <!-- measured 2026-11-09 with the two port cases for #102; before it 33/2/35 and 326/9/335 at main 1b00de8 (#97), with the request-log shape tests (#81) and the portal pacing tests (#95); before that 30/2/32 and 291/9/300 on 2026-10-12 at release 0.9.2, with settings read after dotenv; before that 29/2/31 and 287/9/296 with the per-call time limit (#79), and 27/2/29 and 270/9/279 on 2026-10-11 with the data-path fixes (#75, #76, #77) -->
 - The `container-image` job (same workflow) builds the `Dockerfile`, runs the image read-only as
   a non-root user, checks `/healthz`, scans the image for `.env`/`.git`/a planted decoy value, and
   makes a live portal call through a CONNECT-only proxy from a network with no other way out
@@ -72,9 +72,11 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
   [`.claude/rules/skills.md`](.claude/rules/skills.md).
 - `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` — optional; the egress proxy for portal calls, honoured
   through a CONNECT tunnel by `src/utils/outbound-proxy.ts` (installed from `src/index.ts` after
-  dotenv). Unset, nothing is installed. axios's own reading of these variables sends `https://`
-  requests to the proxy in absolute form, no tunnel, which a CONNECT-only proxy refuses; that is
-  why the module exists. README "Run in a container" has the operator-facing semantics.
+  dotenv). Unset, nothing is installed. The module switches axios's own proxy handling off
+  (`proxy: false`). axios 1.9.0, which it was written against, sent `https://` requests to the
+  proxy in absolute form, no tunnel, which a CONNECT-only proxy refuses; axios 1.21.0 tunnels
+  through CONNECT on its own (measured 2026-11-09). README "Run in a container" has the
+  operator-facing semantics.
 - `MAX_RAW_ROWS` — optional; the most rows one `get_data` query returns (`limit`, `"all"`, raw
   SoQL), default 10,000, read per call so a value in `.env` applies (`maxRawRows` in
   `src/tools/search.ts`). The byte bounds on one portal exchange, 32 MiB in and 1 MiB out, are

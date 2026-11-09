@@ -20,7 +20,7 @@ import http from 'node:http';
 import { fetchFromSocrataApi } from '../utils/api.js';
 import { withCallLimit, allowanceMs, REQUEST_LIMIT_MS, CALL_LIMIT_MS } from '../utils/call-budget.js';
 import { McpError, ErrorCode } from '../utils/mcp-errors.js';
-import { misclassifyingWordsIn } from './misclassifying-words.js';
+import { listenOnAPortSpelling429, misclassifyingWordsIn } from './misclassifying-words.js';
 
 const DATA_PATH = '/resource/abcd-1234.json';
 
@@ -36,7 +36,7 @@ type Portal = {
   close: () => Promise<void>;
 };
 
-async function portal(): Promise<Portal> {
+async function portal(onPortSpelling429 = false): Promise<Portal> {
   const p = { requests: 0, answers: [] as Answer[] } as Portal;
   const server = http.createServer((req, res) => {
     p.requests += 1;
@@ -65,7 +65,8 @@ async function portal(): Promise<Portal> {
       res.end(answer.body);
     }, answer.afterMs);
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  if (onPortSpelling429) await listenOnAPortSpelling429(server);
+  else await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as { port: number };
   p.host = `127.0.0.1:${port}`;
   p.base = `http://${p.host}`;
@@ -131,7 +132,8 @@ describe('a portal request that runs past its time', () => {
       expect((refusal as McpError).code).toBe(ErrorCode.InvalidParams);
       expect(refusal.message.replace(/waited \d+ s/, 'waited N s')).toBe(refusalText(origin.host));
       expect(refusal.message).not.toContain('retried');
-      expect(misclassifyingWordsIn(refusal.message), refusal.message).toEqual([]);
+      // Host removed first: a random port can spell a listed status code (#102).
+      expect(misclassifyingWordsIn(refusal.message.replaceAll(origin.host, '<host>')), refusal.message).toEqual([]);
       // Main sent it four times, 8.8 s at a 300 ms limit; the bound is loose for a loaded machine.
       expect(elapsed).toBeGreaterThanOrEqual(290);
       expect(elapsed).toBeLessThan(3_000);
@@ -141,6 +143,23 @@ describe('a portal request that runs past its time', () => {
       expect(origin.requests - before).toBe(1);
     });
   }
+
+  it('a data query on a port that spells 429: refused in words the website does not misread', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const spelled = await portal(true);
+    try {
+      expect(spelled.host).toMatch(/^127\.0\.0\.1:429\d\d$/);
+      spelled.answers = ['hold'];
+      const refusal = await refusalOf(withCallLimit(() => fetchFromSocrataApi(DATA_PATH, { $limit: 10 }, spelled.base), 300));
+
+      expect(refusal).toBeInstanceOf(McpError);
+      expect(refusal.message.replace(/waited \d+ s/, 'waited N s')).toBe(refusalText(spelled.host));
+      // Host removed first: this port spells a listed status code (#102).
+      expect(misclassifyingWordsIn(refusal.message.replaceAll(spelled.host, '<host>')), refusal.message).toEqual([]);
+    } finally {
+      await spelled.close();
+    }
+  });
 
   it("one limit across a call's requests: a count that answers, then a data query held, refused at the call's limit", async () => {
     const lines: string[] = [];

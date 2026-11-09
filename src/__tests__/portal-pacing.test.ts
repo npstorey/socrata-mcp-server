@@ -22,7 +22,7 @@ import {
   retryAfterMs,
   takeTurn,
 } from '../utils/portal-pacing.js';
-import { misclassifyingWordsIn } from './misclassifying-words.js';
+import { listenOnAPortSpelling429, misclassifyingWordsIn } from './misclassifying-words.js';
 
 const DATA_PATH = '/resource/abcd-1234.json';
 
@@ -37,7 +37,7 @@ type Portal = {
   close: () => Promise<void>;
 };
 
-async function portal(): Promise<Portal> {
+async function portal(onPortSpelling429 = false): Promise<Portal> {
   const p = { arrivals: [] as number[], answers: [] as Answer[] } as Portal;
   const server = http.createServer((req, res) => {
     p.arrivals.push(Date.now());
@@ -47,7 +47,8 @@ async function portal(): Promise<Portal> {
     res.writeHead(answer.status, { 'Content-Type': 'application/json', ...answer.headers });
     res.end(answer.status === 200 ? '[{"n":"1"}]' : '{"message":"busy"}');
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  if (onPortSpelling429) await listenOnAPortSpelling429(server);
+  else await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as { port: number };
   p.host = `127.0.0.1:${port}`;
   p.base = `http://${p.host}`;
@@ -171,8 +172,30 @@ describe('requests to a portal', () => {
     expect(refusal).toBeInstanceOf(McpError);
     expect((refusal as McpError).code).toBe(ErrorCode.InvalidParams);
     expect(refusal.message).toContain(MIN_INTERVAL_ENV);
-    expect(misclassifyingWordsIn(refusal.message)).toEqual([]);
+    // Host removed first: a random port can spell a listed status code (#102).
+    expect(misclassifyingWordsIn(refusal.message.replaceAll(origin.host, '<host>')), refusal.message).toEqual([]);
     expect(origin.arrivals).toHaveLength(1);
+  });
+
+  it('on a port that spells 429, with no turn inside the call, are refused in words the website does not misread', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.stubEnv(MIN_INTERVAL_ENV, '2000');
+    const spelled = await portal(true);
+    try {
+      expect(spelled.host).toMatch(/^127\.0\.0\.1:429\d\d$/);
+      await withCallLimit(() => fetchFromSocrataApi(DATA_PATH, {}, spelled.base), 1_000);
+      const refusal = await refusalOf(
+        withCallLimit(() => fetchFromSocrataApi(DATA_PATH, {}, spelled.base), 1_000)
+      );
+
+      expect(refusal).toBeInstanceOf(McpError);
+      expect(refusal.message).toContain(spelled.host);
+      // Host removed first: this port spells a listed status code (#102).
+      expect(misclassifyingWordsIn(refusal.message.replaceAll(spelled.host, '<host>')), refusal.message).toEqual([]);
+      expect(spelled.arrivals).toHaveLength(1);
+    } finally {
+      await spelled.close();
+    }
   });
 
   for (const status of [429, 503]) {
