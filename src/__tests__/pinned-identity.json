@@ -1,0 +1,9 @@
+{
+  "serverName": "socrata-mcp-server",
+  "serverVersion": "0.9.2",
+  "tools": {
+    "get_data": "5b19e21075e96c70b461c1d93f6bf5c51b3c461e1c839dbaa57180e35191c9fa",
+    "search": "9b00e84c66e636110a581e8ccbef30f0464b6c127593f72bd568b25f85acd384",
+    "fetch": "c4593d9b980316180b61820e09055e5721c297a31b02ada653b74c1eda778959"
+  }
+}
