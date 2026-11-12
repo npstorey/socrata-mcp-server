@@ -8,6 +8,11 @@ its Render-issued hostname is still the pre-rename `opengov-mcp-server.onrender.
 Tool surface: `SOCRATA_TOOLS` in `src/tools/socrata-tools.ts`, registered in
 `src/index.ts`. Read those rather than a list here.
 
+The reported server name and version, and each listed tool's schema hash, are pinned in
+`src/__tests__/pinned-identity.json` (`pinned-identity.test.ts`). Moving one is a two-pin stage:
+capture the new values at the PR's head, release a pack that lists both pins, deploy the site,
+then merge.
+
 ## Strategic context — what not to include in this repo
 
 This repo is public. Strategic and relationship context — named external stakeholders,
@@ -38,10 +43,10 @@ The three CI gates (`.github/workflows/ci.yml`), with what a pass looks like:
 - `npm run clean && npm run build:tsc` — `tsc --outDir dist`, silent on success. CI runs
   those two pieces rather than `npm run build`, whose `prebuild-check` step dumps ~1,100
   lines of SDK diagnostics and produces no artifacts.
-- `npm test` — `Test Files 33 passed | 2 skipped (35)`, `Tests 328 passed | 9 skipped (337)`.
+- `npm test` — `Test Files 34 passed | 2 skipped (36)`, `Tests 338 passed | 9 skipped (347)`.
   The 9: 6 live-API integration tests behind `RUN_INTEGRATION=1` (`npm run
   test:integration`), and 3 hardcoded `.skip`s in the transport-sequence tests.
-  <!-- measured 2026-11-09 with the two port cases for #102; before it 33/2/35 and 326/9/335 at main 1b00de8 (#97), with the request-log shape tests (#81) and the portal pacing tests (#95); before that 30/2/32 and 291/9/300 on 2026-10-12 at release 0.9.2, with settings read after dotenv; before that 29/2/31 and 287/9/296 with the per-call time limit (#79), and 27/2/29 and 270/9/279 on 2026-10-11 with the data-path fixes (#75, #76, #77) -->
+  <!-- 2026-11-12 with the pinned-identity test (one file, ten cases): measured in a sandbox that refuses a listen, where 8 port-binding files fail on base and head alike; totals 35 -> 36 files and 337 -> 347 tests, and the ten new cases pass. Before it 33/2/35 and 328/9/337, measured 2026-11-09 with the two port cases for #102; before that 33/2/35 and 326/9/335 at main 1b00de8 (#97), with the request-log shape tests (#81) and the portal pacing tests (#95); before that 30/2/32 and 291/9/300 on 2026-10-12 at release 0.9.2, with settings read after dotenv; before that 29/2/31 and 287/9/296 with the per-call time limit (#79), and 27/2/29 and 270/9/279 on 2026-10-11 with the data-path fixes (#75, #76, #77) -->
 - The `container-image` job (same workflow) builds the `Dockerfile`, runs the image read-only as
   a non-root user, checks `/healthz`, scans the image for `.env`/`.git`/a planted decoy value, and
   makes a live portal call through a CONNECT-only proxy from a network with no other way out
